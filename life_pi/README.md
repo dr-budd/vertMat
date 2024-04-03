@@ -5,7 +5,8 @@ The provided predictions have been trained on cytosine-phosphate-guanine (CpG) d
 
 ## Installation
 ```
-git clone https://bitbucket.csiro.au/scm/~yon012/life_pi.git
+git clone https://github.com/dr-budd/vertMat.git
+cd life_pi
 pip install -r requirements.txt
 ```
 
