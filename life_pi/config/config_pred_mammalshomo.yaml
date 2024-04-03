@@ -1,0 +1,12 @@
+data_dir: 'data' # Data directory
+output_dir: 'outputs/mammalshomo/pred' # Output file directory
+filename: '13.00_ensemble_data_mammalshomounknowns' # Data filename
+y_labelname: 'age_mat' # y response variable name
+feature_prefix: 'order|FP|prop_gc' # Feature name prefix
+log_y: True # Use y in log
+
+# Load trained model
+model_dir: 'outputs/mammalshomo' # Model directory
+model_filename: 'mapie_cv.pkl' # Model filename
+#model_filename: 'mapie_cqr_alpha0.1.pkl' # Model filename
+alpha: 0.1 # 1-confidence interval (except for cqr)

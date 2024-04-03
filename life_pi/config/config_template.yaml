@@ -1,0 +1,14 @@
+seed: 1 # Random seed
+data_dir: 'data' # Data directory
+output_dir: 'outputs' # Output file directory
+filename: '07.00_ensemble_data_' # Data filename
+estimator_filename: '07.00_glmnetcv_parameters_' # Estimator filename
+y_labelname: 'age_mat' # y response variable name
+feature_prefix: 'order|FP|prop_gc' # Feature name prefix
+file_nsplit: 0 # 0 for all, N to select split
+test_size: 0.5 # Test vs validation split
+scale_X: 'standardize' # Scale X data: 'standardize', 'normalize', null
+scale_y: 'standardize' # Scale y data: 'standardize', 'normalize', null
+log_y: True # Use y in log
+list_strategies: ['naive', 'jackknife_plus_ab', 'cv', 'cv_plus', 'cv_minmax', 'cqr'] # list of prediction interval methods
+alpha: 0.1 # 1-confidence interval
