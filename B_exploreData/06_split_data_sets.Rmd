@@ -1,0 +1,203 @@
+---
+title: "Split data train/validate/test"
+output:
+  html_notebook:
+        code_folding: hide
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r message=FALSE}
+## load libraries
+library(caret)
+library(viridis)
+library(tidyverse)
+```
+
+```{r message=FALSE}
+## SET UP ----
+
+## define data sets
+data_sets <- c("AllHomo",
+               "FishDanio",
+               "MammalsHomo",
+               "ReptilesGallus")
+
+## for testing
+# data_sets <- c("AllHomo")
+
+## define response
+response <- "mean_age_mat"
+
+## print it
+paste0("metric type specified: ", response)
+
+## set seed for split
+set.seed(1)
+
+## loop through analysis
+for (data_set in data_sets) {
+  
+  data_set_tl <- tolower(data_set)
+  print(data_set_tl)
+  
+  ## import summary metadata 
+  pheno_unmod <- read.csv(paste0("dataFiles/05.00_pheno_", data_set_tl, ".csv"))
+  
+  ## replace order info for sole member species
+  pheno <- pheno_unmod %>%
+    ## add counts for number of species in order
+    add_count(order) %>%
+    ## replace order with other
+    mutate(order_mod = case_when(n >= 10 ~ order,
+                                 TRUE ~ "Other")) %>%
+    ## remove count column
+    select(-n)
+  
+  print(paste0("num in order < ten: ", 
+         round(100/nrow(pheno_unmod)*nrow(pheno %>% filter(order_mod == "Other"))), 
+         "%"))
+  print(paste0("num in order < ten: ", 
+         round(100/nrow(pheno_unmod)*nrow(pheno %>% filter(order_mod != "Other"))), 
+         "%"))
+
+  ## split by order
+  training_species <- NULL
+  for (txa in levels(factor(pheno$order_mod))) {
+    # print(txa)
+    temp_data <- filter(pheno, order_mod == txa)
+    temp_si <- createDataPartition(y = log(temp_data[[response]]),
+                                   times = 1, p = 0.8, list=FALSE)
+    temp_spp <- temp_data[temp_si, ]$organism_name
+    training_species <- c(training_species, temp_spp)
+  }
+  
+  ## for all homo data only, make sure n > 2 for amphibians
+  if (data_set_tl == "allhomo") {
+    train_amphibians<-pheno %>% filter(., organism_name %in% training_species) %>% filter(model_group == "Amphibians")
+    test_amphibians<-pheno %>% filter(., !organism_name %in% training_species) %>% filter(model_group == "Amphibians")
+    if (nrow(test_amphibians) < 3) {
+      num_req <- 3 - (nrow(test_amphibians))
+      drops <- sample(train_amphibians$organism_name, num_req)
+      training_species <- training_species[!training_species %in% drops]
+    }
+  }
+
+  print(paste0(data_set_tl, " percent trainVal: ", 
+               round(100/nrow(pheno_unmod)*length(training_species), digits=2), " %"))
+  
+  ## check
+  print(length(training_species))
+  print(length(unique(training_species)))
+  
+  ## add info to pheno data
+  pheno <- pheno_unmod %>%
+    mutate(initial_split = case_when(organism_name %in% training_species ~ "trainValidate", 
+                                     .default = "test"))
+  
+  print(length(pheno$organism_name))
+  print(length(unique(pheno$organism_name)))
+  
+  ## export pheno 
+  write.csv(pheno,
+            paste0("dataFiles/06.00_pheno_", data_set_tl, ".csv"),
+            row.names = FALSE)
+  
+  ## for plotting below
+  assign(paste0("pheno_", data_set_tl), 
+         full_join(pheno, pheno_unmod %>%
+                          mutate(initial_split = "All data")))
+  
+}
+```
+
+```{r}
+## join data
+pheno_all <- full_join(pheno_allhomo %>%
+                         mutate(model = "All-vertebrate"), 
+                       pheno_fishdanio %>%
+                         mutate(model = "Fish")) %>%
+  full_join(., pheno_mammalshomo %>%
+              mutate(model = "Mammal")) %>%
+  full_join(., pheno_reptilesgallus %>%
+              mutate(model = "Reptile"))
+
+## create colour vector
+cols <- c("grey30", 
+          # viridis_pal(option="D", direction=-1)(4)[1],
+          viridis_pal(option="D", direction=-1)(4)[2],
+          viridis_pal(option="D", direction=-1)(4)[3], 
+          viridis_pal(option="D", direction=-1)(4)[4])
+
+# scales::show_col(cols)
+```
+
+## PLOTS
+
+```{r}
+## mean age mat
+ggplot(pheno_all, aes(x=log(mean_age_mat))) + 
+  geom_histogram(aes(fill=model))+
+  theme_bw()+
+  facet_grid(rows=vars(initial_split), 
+             scales="free_y",
+             cols=vars(model))+
+  scale_fill_manual(values=cols, guide=FALSE)
+```
+
+```{r}
+## mean cpg oe
+ggplot(pheno_all, aes(x=mean_cpg_oe)) + 
+  geom_histogram(aes(fill=model))+
+  theme_bw()+
+  facet_grid(rows=vars(initial_split), cols=vars(model), 
+             scales="free_y")+
+  scale_fill_manual(values=cols, guide=FALSE)
+```
+
+```{r}
+## mean non-zero cpg oe
+ggplot(pheno_all, aes(x=mean_nz_cpg_oe)) + 
+  geom_histogram(aes(fill=model))+
+  theme_bw()+
+  facet_grid(rows=vars(initial_split), cols=vars(model), 
+             scales="free_y")+
+  scale_fill_manual(values=cols, guide=FALSE)
+```
+```{r}
+## percent gc
+ggplot(pheno_all, aes(x=gc_percent)) + 
+  geom_histogram(aes(fill=model))+
+  theme_bw()+
+  facet_grid(rows=vars(initial_split), cols=vars(model), 
+             scales="free_y")+
+  scale_fill_manual(values=cols, guide=FALSE)
+```
+
+```{r}
+## order
+ggplot(pheno_all, aes(x=order)) +
+  geom_bar(aes(fill=model)) +
+  theme_bw()+
+  facet_grid(rows=vars(initial_split), cols=vars(model), 
+             scales="free_y")+
+  theme(axis.text.x=element_blank())+
+  scale_fill_manual(values=cols, guide=FALSE)
+```
+
+```{r}
+## END SCRIPT
+```
+
+
+
+
+
+
+
+
+

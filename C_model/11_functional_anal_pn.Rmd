@@ -1,0 +1,661 @@
+---
+title: "promoter analysis"
+author: "Alyssa"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r warning=FALSE, message=FALSE}
+## LOAD LIBRARIES ----
+
+library(tidyverse)
+library(gprofiler2)
+library(clusterProfiler)
+library(ggpubr)
+library(ggbreak)
+library(patchwork)
+library(ggimage)
+
+set.seed(1)
+```
+
+```{r warning=FALSE, message=FALSE}
+## IMPORT AND FORMAT DATA ----
+
+## read in promoter names from HPC ----
+
+promoter_names_gallus <- read.table("../A_getGenomicData/promoterNames/epd_gallus_gallus_names.txt") %>%
+  rename(promoter_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+
+promoter_names_homo <- read.table("../A_getGenomicData/promoterNames/epd_homo_sapien_names.txt") %>%
+  rename(promoter_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+
+promoter_names_danio <- read.table("../A_getGenomicData/promoterNames/epd_danio_rerio_names.txt") %>%
+  rename(promoter_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+
+## import predictive promoters and add names ----
+
+nonzero_features_avg_reptiles <- 
+  read.csv("dataFiles/09.00_nonzero_features_avg_reptilesgallus.csv") %>%
+  left_join(., promoter_names_gallus, by = c("feature_id" = "promoter_id"))
+
+nonzero_features_avg_mammals <- 
+         read.csv("dataFiles/09.00_nonzero_features_avg_mammalshomo.csv") %>%
+         left_join(., promoter_names_homo, by = c("feature_id" = "promoter_id"))
+
+nonzero_features_avg_fish <- 
+  read.csv("dataFiles/09.00_nonzero_features_avg_fishdanio.csv") %>%
+  left_join(., promoter_names_danio, by = c("feature_id" = "promoter_id"))
+
+nonzero_features_avg_allvert <- 
+         read.csv("dataFiles/09.00_nonzero_features_avg_allhomo.csv") %>%
+         left_join(., promoter_names_homo, by = c("feature_id" = "promoter_id"))
+
+## combine
+predictive_features_all <- full_join(
+  nonzero_features_avg_reptiles %>%
+    mutate(model="Reptile"), 
+  nonzero_features_avg_mammals %>%
+    mutate(model="Mammal")) %>%
+  full_join(., nonzero_features_avg_fish %>%
+    mutate(model="Fish")) %>%
+  full_join(., nonzero_features_avg_allvert %>%
+    mutate(model="All-vertebrate"))
+
+## only sig promoters
+predictive_promoters_sig_all <- predictive_features_all %>%
+  ## only promoters
+  filter(!is.na(name)) %>%
+  ## only sig corr
+  filter(!is.na(sig_corr_nz))
+  
+```
+
+```{r}
+## group colours
+reptiles_colour <- scales::viridis_pal(option="D")(4)[1]
+mammals_colour <- scales::viridis_pal(option="D")(4)[2]
+fish_colour <- scales::viridis_pal(option="D")(4)[3]
+amphibians_colour <- scales::viridis_pal(option="D")(4)[4]
+my_colours <- c("grey70",
+                fish_colour, mammals_colour, reptiles_colour)
+
+## get number of models
+nav_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_allhomo.rds"), is.null))
+nfish_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_fishdanio.rds"), is.null))
+nmam_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_mammalshomo.rds"), is.null))
+nrept_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_reptilesgallus.rds"), is.null))
+
+## subset for those in all models
+predictive_promoters_sig_sub <- predictive_promoters_sig_all %>%
+  ## add total
+  mutate(ttl_models = as.numeric(ifelse(model=="All-vertebrate", nav_mods, 
+                             ifelse(model=="Fish", nfish_mods, 
+                                    ifelse(model=="Mammal", nmam_mods,
+                                           ifelse(model=="Reptile", nrept_mods, 
+                                                  "error")))))) %>%
+  mutate(perc_mods = (100/ttl_models*number_of_models)) %>%
+  ## only promoters in more than n the partitions
+  filter(perc_mods == 100)
+
+## plot sig cutoff
+psc_data <- predictive_promoters_sig_sub %>%
+  ## filter mean weight by model
+  group_by(model) %>%
+  arrange(desc(abs(mean_weight))) %>%
+  slice(1:5) %>%
+  ungroup()
+
+psc <- ggplot(psc_data %>%
+                mutate(name = tolower(name)),
+              aes(x=name, y=mean_weight, fill=model))+
+  scale_fill_manual(values=my_colours)+
+  geom_bar(stat="identity")+
+  facet_grid(cols = vars(model), scales="free", space="free")+
+  theme_classic()+
+  theme(axis.text.x=element_text(angle=90, hjust=1), 
+        axis.title.x=element_blank(),
+        strip.text = element_blank(),
+        legend.position = "none",
+        panel.grid.minor=element_blank(),
+        panel.border = element_blank(),
+        strip.background = element_blank())+
+  labs(y="Mean weight")
+
+# psc
+```
+
+## gene ontology
+
+```{r}
+## filter for positive
+positive_promoters_sig_all <- predictive_promoters_sig_all %>%
+  filter(npv == "Positive")
+
+## filter for negative
+negative_promoters_sig_all <- predictive_promoters_sig_all %>%
+  filter(npv == "Negative")
+```
+
+
+```{r warning=FALSE, message=FALSE}
+## FUNCTIONAL ANAL (optional - see next chunk if not re-running)----
+
+# Sys.time()
+# 
+# ## NB: gprofiler2 package supports all the same organisms, namespaces
+# ## and data sources as the web tool.
+# ## The list of organisms and corresponding data sources is
+# ## available here: https://biit.cs.ut.ee/gprofiler/page/organism-list.
+# 
+# 
+# multi_gos_res_reptiles = gost(query=list("Reptiles - positively associated" =
+#                                            positive_promoters_sig_all %>% 
+#                                            filter(model == "Reptile") %>% pull(name),
+#                                          "Reptiles - negatively associated" =
+#                                            negative_promoters_sig_all %>% 
+#                                            filter(model == "Reptile") %>% pull(name)),
+#                               organism = "ggallus")
+# 
+# multi_gos_res_mammals = gost(query=list("Mammals - positively associated" =
+#                                            positive_promoters_sig_all %>% 
+#                                            filter(model == "Mammal") %>% pull(name),
+#                                         "Mammals - negatively associated" =
+#                                            negative_promoters_sig_all %>% 
+#                                            filter(model == "Mammal") %>% pull(name)),
+#                              organism = "hsapiens")
+# 
+# multi_gos_res_allvert = gost(query=list("All-vertebrates - positively associated" =
+#                                            positive_promoters_sig_all %>% 
+#                                            filter(model == "All-vertebrate") %>% pull(name),
+#                                         "All-vertebrates - negatively associated" =
+#                                            negative_promoters_sig_all %>% 
+#                                            filter(model == "All-vertebrate") %>% pull(name)),
+#                              organism = "hsapiens")
+# 
+# multi_gos_res_fish = gost(query=list("Fish - positively associated" =
+#                                        negative_promoters_sig_all %>% 
+#                                        filter(model == "Fish") %>% pull(name),
+#                                      "Fish - negatively associated" =
+#                                        negative_promoters_sig_all %>% 
+#                                        filter(model == "Fish") %>% pull(name)), 
+#                           organism = "drerio")
+# 
+# ## format stuff
+# 
+# ## combine results
+# combined_results <- full_join(multi_gos_res_reptiles$result %>%
+#                                 mutate(model = "Reptile"),
+#                               multi_gos_res_mammals$result %>%
+#                                 mutate(model = "Mammal")) %>%
+#   full_join(., multi_gos_res_fish$result %>%
+#               mutate(model = "Fish")) %>%
+#   full_join(., multi_gos_res_allvert$result %>%
+#               mutate(model = "All-vertebrate")) %>%
+#   mutate(nltpadj = -log10(p_value)) %>%
+#   ## for cutoff
+#   mutate(nltpadjc = ifelse(nltpadj <= 16,
+#                            nltpadj,
+#                            17)) %>%
+#   mutate(query = gsub(".*negatively associated.*",
+#                       "Negatively associated", query)) %>%
+#   mutate(query = gsub(".*positively associated.*",
+#                       "Positively associated", query)) %>%
+#   mutate(prop_genes = intersection_size/query_size*1)
+# 
+# ## save it
+# # saveRDS(combined_results, file=paste0("dataFiles/11.00_combined_results_homo_posneg.RData"))
+# 
+# Sys.time()
+```
+
+```{r}
+combined_results <- readRDS(paste0("dataFiles/11.00_combined_results_homo_pn.RData"))
+```
+
+```{r warning=FALSE, message=FALSE}
+library(eulerr)
+
+unique_function_list <- list(
+  Allvert =
+    unique(combined_results %>%
+             filter(model=="All-vertebrate") %>%
+             pull(term_name)),
+  Fish = 
+    unique(combined_results %>%
+             filter(model=="Fish") %>%
+             pull(term_name)), 
+  Mammals = 
+    unique(combined_results %>%
+             filter(model=="Mammal") %>%
+             pull(term_name)), 
+  Reptiles = 
+    unique(combined_results %>%
+             filter(model=="Reptile") %>%
+             pull(term_name)))
+
+
+eul <- plot(euler(unique_function_list),
+            quantities = list(cex = 0.45),
+            alpha = 0.8,
+            labels = FALSE,
+            fill = my_colours)
+
+# eul
+```
+
+```{r}
+euler(unique_function_list)
+```
+
+```{r}
+## totals
+print("All-vertebrate")
+length(unique_function_list$Allvert)
+print("Fish")
+length(unique_function_list$Fish)
+print("Mammal")
+length(unique_function_list$Mammals)
+print("Reptiles")
+length(unique_function_list$Reptiles)
+```
+
+```{r warning=FALSE, message=FALSE}
+## choose overlapping groups (needs to be done manually for new data)
+overlap1 <- intersect(intersect(
+  unique_function_list$Allvert, 
+  unique_function_list$Mammals),
+  unique_function_list$Reptiles)
+
+overlap2 <- intersect(intersect(
+  unique_function_list$Allvert,
+  unique_function_list$Fish), 
+  unique_function_list$Mammals)
+
+shared_functions <- unique(c(overlap1, overlap2))
+
+shared_function_table_unmod <- combined_results %>%
+  filter(term_name %in% shared_functions)
+
+## reduce and scale
+shared_function_table <- shared_function_table_unmod %>%
+  select(query, model, p_value, nltpadj, term_name, 
+         prop_genes, intersection_size) %>%
+  mutate(p.value = ifelse(query=="Negatively associated", 
+                          nltpadj*-1, 
+                          nltpadj))
+```
+
+```{r}
+length(shared_function_table %>% pull(term_name) %>% unique(.))
+```
+
+
+```{r fig.width=8.75, fig.height=4.2}
+tit<-"Negatively associated                    Positively associated"
+
+shared_function_table <- shared_function_table %>%
+  ## add line break to third space 
+  mutate(term_name_break = sub("^(\\S+\\s+\\S+\\s+\\S+)\\s+(.*)$", 
+                               "\\1\n\\2", term_name)) %>% 
+  mutate(term_name_id = sprintf("%02d", 
+                                as.numeric(factor(term_name, 
+                                                  levels = unique(term_name))))) %>%
+  mutate(term_name_label = paste0(term_name_id, ". ", term_name)) %>%
+  mutate(term_name_label = gsub("^(\\d+\\.\\s+)([a-z])", "\\1\\U\\2", 
+                                term_name_label, perl = TRUE)) %>%
+  mutate(term_name_label = 
+           factor(term_name_label, 
+                  levels = c(sort(unique(term_name_label), 
+                                  decreasing=TRUE)))) %>%
+  mutate(model_label = ifelse(model == "Fish", 
+                              "Fish-specific", 
+                              ifelse(model=="Mammal", 
+                                     "Mammal-specific", 
+                                     ifelse(model=="Reptile", 
+                                            "Reptile-specific", 
+                                            model))))
+
+ybreak <- 3
+
+p2<-ggplot(shared_function_table,
+       aes(x=term_name_label, y=p.value)) +
+  theme_bw()+
+  geom_col(aes(fill=model_label, group=model),
+           colour="grey70", alpha = 0.9, size = 0.1, position = "dodge")+
+  geom_text(aes(label = paste0(" n=", intersection_size,
+                               " (", round(prop_genes, digits=2),
+                               ") "),
+                hjust=0.5-sign(p.value)/2,
+                # vjust=0.5, 
+                group=model),
+            position=position_dodge(width=0.9),
+            size=1.5)+
+  coord_flip()+
+  scale_y_continuous(labels=abs, 
+                    limits=c(min(shared_function_table$p.value)*1.15,
+                    max(shared_function_table$p.value)*1.2))+
+  scale_y_break(breaks=c(-0.001, ybreak), scales="free")+
+  scale_fill_manual(values=my_colours, name="Model")+
+  labs(title = tit, y="-log10(p-adj)", tag="/ /")+ 
+  theme(plot.tag.position = c(0.624, 0.16), ## x, y
+        plot.tag = element_text(size=9),
+        legend.position="bottom",
+        legend.margin=margin(7,-7,-7,-7),
+        legend.key.size=unit(0.25, "cm"),
+        ## y-axis (term)
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_text(size=8),
+        ## x-axis (p-value)
+        axis.ticks.x.top = element_blank(),
+        axis.text.x.top = element_blank(),
+        axis.line.x.bottom = element_line(linewidth=0.3),
+        axis.ticks.x.bottom = element_line(linewidth = 0.3),
+        axis.title.x.bottom = element_text(size = 8, 
+                                           hjust = 0.65,
+                                           vjust = 10,
+                                           margin =
+                                             margin(-10, 10, 10, 10)),
+        panel.border = element_rect(colour = NA, fill = NA),
+        plot.title = element_text(size=9, 
+                                  hjust=0.66,
+                                  margin=margin(0,0,0,0)), 
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+# p2
+```
+
+
+```{r fig.width = 8.75, fig.height=7}
+part1 <- ggarrange(psc+ggtitle("Top five genes")+
+                               theme(title = element_text(size=10), 
+                                     axis.text.x=element_text(size=7),
+                                     axis.text.y=element_text(size=8),
+                                     axis.title.y=element_text(size=10)), 
+                             ## add spacer
+                             ggplot() + theme_void(),  
+                             ## add title to euler
+                             annotate_figure(eul, top = text_grob("Function count", 
+                                                                  size = 10)), 
+                             ggplot() + theme_void(),
+                             nrow = 1, widths = c(0.75, 0.05, 0.25, 0.05),
+                             # font.label=list(face="plain"),
+                             labels = c("A", "", "B", ""))
+
+fig_title <- as.expression(bquote(bold('C ')~'   Shared functions'))
+
+((part1 + p2+ggtitle(fig_title)+
+    theme(plot.title = element_text(size=11, margin=margin(0,0,0,0)),
+          plot.subtitle = element_text(size=10)))+
+    plot_layout(nrow = 2, ncol=1,
+                heights = c(1, 2)))
+
+ggsave(paste0("figuresTables/Figure [functional].svg"),
+       width = 8.75,
+       height = 7,
+       units = "in")
+
+ggsave(paste0("figuresTables/Figure [functional].png"),
+       width = 8.75,
+       height = 7,
+       units = "in")
+```
+
+
+```{r}
+## shared function group counts
+function_types <- c("development", "regul", "process", "structure", 
+                    "transcription", "differentiation")
+
+for (func in function_types) {
+  print(paste0("Function type: ", func, "; Count: ", shared_function_table %>%
+                 select(term_name, term_name_label) %>%
+                 unique(.) %>%
+                 filter(grepl(func, term_name, ignore.case=TRUE)) %>%
+                 summarise(., n=n())))
+}
+```
+
+```{r}
+## get 'full' gene name info from NCBI
+Human_CARF_full <- "calcium responsive transcription factor"
+Human_CXorf38_full <- "chromosome X open reading frame 38"
+Human_LHX8_full <- "LIM homeobox 8"
+`Human_RP3-336H9_full` <- "(now RPGR) retinitis pigmentosa GTPase regulator"
+Human_SLITRK6_full <- "SLIT and NTRK like family member 6"
+  
+## get gene summary info from NCBI
+Human_CARF_sum <- "Enables DNA binding activity and DNA-binding transcription factor activity. Involved in cellular response to potassium ion and positive regulation of transcription from RNA polymerase II promoter in response to calcium ion. Predicted to be located in granular component. Predicted to be active in nucleus."
+Human_CXorf38_sum <- "Not available."
+Human_LHX8_sum <- "The protein encoded by this gene is a member of the LIM homeobox family of proteins, which are involved in patterning and differentiation of various tissue types. These proteins contain two tandemly repeated cysteine-rich double-zinc finger motifs known as LIM domains, in addition to a DNA-binding homeodomain. This family member is a transcription factor that plays a role in tooth morphogenesis. It is also involved in oogenesis and in neuronal differentiation. This gene is a candidate gene for cleft palate, and it is also associated with odontoma formation. Alternative splicing of this gene results in multiple transcript variants."
+`Human_RP3-336H9_sum` <- "(RPGR) This gene encodes a protein with a series of six RCC1-like domains (RLDs), characteristic of the highly conserved guanine nucleotide exchange factors. The encoded protein is found in the Golgi body and interacts with RPGRIP1. This protein localizes to the outer segment of rod photoreceptors and is essential for their viability. Mutations in this gene have been associated with X-linked retinitis pigmentosa (XLRP). Multiple alternatively spliced transcript variants that encode different isoforms of this gene have been reported, but the full-length natures of only some have been determined."
+Human_SLITRK6_sum <- "This gene encodes a member of the SLITRK protein family. Members of this family are integral membrane proteins that are characterized by two N-terminal leucine-rich repeat (LRR) domains and a C-terminal region that shares homology with trk neurotrophin receptors. This protein functions as a regulator of neurite outgrowth required for normal hearing and vision. Mutations in this gene are a cause of myopia and deafness."
+
+Human_CARF_exp <- "Broad expression in testis (RPKM 5.9), thyroid (RPKM 3.4) and 24 other tissues"
+Human_CXorf38_exp <- "Ubiquitous expression in lymph node (RPKM 5.9), thyroid (RPKM 5.2) and 25 other tissues"
+Human_LHX8_exp <- "Low expression observed in reference dataset"
+`Human_RP3-336H9_exp` <- "(RPGR) Ubiquitous expression in testis (RPKM 2.6), lung (RPKM 2.3) and 25 other tissues"
+Human_SLITRK6_exp <- "Biased expression in urinary bladder (RPKM 12.2), salivary gland (RPKM 7.4) and 11 other tissues"
+
+Zebrafish_hoxc11a_full <- "homeobox C11a"
+Zebrafish_dpf1_full <- "double PHD fingers 1"  
+Zebrafish_hoxc3a_full <- "homeobox C3a"
+Zebrafish_map2k7_full <- "mitogen-activated protein kinase kinase 7"  
+Zebrafish_kmt2a_full <- "lysine (K)-specific methyltransferase 2A"  
+
+Zebrafish_hoxc11a_sum <- "Predicted to enable DNA-binding transcription factor activity, RNA polymerase II-specific and RNA polymerase II cis-regulatory region sequence-specific DNA binding activity. Predicted to be involved in anatomical structure development and regulation of transcription by RNA polymerase II. Predicted to act upstream of or within regulation of transcription, DNA-templated. Predicted to be active in nucleus. Is expressed in neural tube; tail bud; and ventral mesenchyme. Orthologous to human HOXC11 (homeobox C11)."
+Zebrafish_dpf1_sum <- "Predicted to enable histone binding activity and transcription coregulator activity. Predicted to be involved in negative regulation of transcription, DNA-templated; nervous system development; and positive regulation of transcription by RNA polymerase II. Predicted to be part of nBAF complex. Is expressed in brain; olfactory placode; and telencephalon. Orthologous to human DPF1 (double PHD fingers 1)."  
+Zebrafish_hoxc3a_sum <- "Predicted to enable DNA-binding transcription factor activity, RNA polymerase II-specific and RNA polymerase II cis-regulatory region sequence-specific DNA binding activity. Predicted to be involved in anterior/posterior pattern specification; embryonic skeletal system morphogenesis; and regulation of transcription by RNA polymerase II. Predicted to act upstream of or within regulation of transcription, DNA-templated. Predicted to be active in nucleus. "
+Zebrafish_map2k7_sum <- "Predicted to enable JUN kinase kinase activity. Acts upstream of or within somitogenesis. Predicted to be located in membrane. Predicted to be integral component of membrane. Orthologous to human MAP2K7 (mitogen-activated protein kinase kinase 7). "  
+Zebrafish_kmt2a_sum <- "Predicted to enable histone methyltransferase activity (H3-K4 specific). Acts upstream of or within glial cell development; nucleate erythrocyte development; and paraxial mesoderm development. Predicted to be located in nucleus. Predicted to be part of histone methyltransferase complex. Is expressed in several structures, including blastoderm; blastodisc; intermediate cell mass of mesoderm; nervous system; and renal system. Human ortholog(s) of this gene implicated in acute myeloid leukemia; cervical cancer; mixed phenotype acute leukemia; and non-Hodgkin lymphoma. Orthologous to human KMT2A (lysine methyltransferase 2A)."  
+
+Zebrafish_hoxc11a_exp <- "(in human ortholog HOXC11) Low expression observed in reference dataset"
+Zebrafish_dpf1_exp <- "(in human ortholog) Biased expression in brain (RPKM 6.5) and testis (RPKM 0.6)"  
+Zebrafish_hoxc3a_exp <- "Unknown"
+Zebrafish_map2k7_exp <- "(in human ortholog) Ubiquitous expression in testis (RPKM 9.3), spleen (RPKM 8.9) and 25 other tissues"  
+Zebrafish_kmt2a_exp <- "(in human ortholog) Ubiquitous expression in ovary (RPKM 12.8), lymph node (RPKM 6.8) and 25 other tissues"
+
+Chicken_APOH_full <- "apolipoprotein H"
+Chicken_HSP90AB1_full <- "heat shock protein 90 alpha family class B member 1"  
+Chicken_TM9SF4_full <- "transmembrane 9 superfamily member 4"
+Chicken_ATP6V0D2_full <- "ATPase H+ transporting V0 subunit d2"  
+Chicken_OSTN_full <- "osteocrin"
+
+Chicken_APOH_sum <- "(in human ortholog) Apolipoprotein H, also known as beta-2-glycoprotein I, is a component of circulating plasma lipoproteins. It has been implicated in a variety of physiologic pathways including lipoprotein metabolism, coagulation, hemostasis, and the production of antiphospholipid autoantibodies. APOH may be a required cofactor for anionic phospholipid binding by the antiphospholipid autoantibodies found in sera of many patients with lupus and primary antiphospholipid syndrome (APS). The anti-beta (2) glycoprotein I antibodies from APS patients, mediate inhibition of activated protein C which has anticoagulant properties. Because beta-2-GPI is the main autoantigen in patients with APS, the disruption of this pathway by autoantibodies may be an important mechanism for thrombosis in patients with APS."
+Chicken_HSP90AB1_sum <- "(in human ortholog) This gene encodes a member of the heat shock protein 90 family; these proteins are involved in signal transduction, protein folding and degradation and morphological evolution. This gene encodes the constitutive form of the cytosolic 90 kDa heat-shock protein and is thought to play a role in gastric apoptosis and inflammation. Alternative splicing results in multiple transcript variants. Pseudogenes have been identified on multiple chromosomes."  
+Chicken_TM9SF4_sum <- "(in human ortholog) Involved in several processes, including positive regulation of protein localization; regulation of intracellular pH; and vacuolar proton-transporting V-type ATPase complex assembly. Located in Golgi apparatus and early endosome."
+Chicken_ATP6V0D2_sum <- "(in human ortholog) Predicted to enable proton transmembrane transporter activity. Predicted to be involved in vacuolar acidification and vacuolar transport. Located in apical plasma membrane. Part of vacuolar proton-transporting V-type ATPase complex."  
+Chicken_OSTN_sum <- "(in human ortholog) Predicted to enable signaling receptor binding activity. Involved in negative regulation of dendrite extension. Predicted to be active in extracellular space. [provided by Alliance of Genome Resources, Apr 2022]" 
+
+Chicken_APOH_exp <- "(in human ortholog) Restricted expression toward liver (RPKM 3533.3)"
+Chicken_HSP90AB1_exp <- "(in human ortholog) Ubiquitous expression in ovary (RPKM 514.6), brain (RPKM 324.0) and 25 other tissues"  
+Chicken_TM9SF4_exp <- "(in human ortholog) Ubiquitous expression in placenta (RPKM 20.7), brain (RPKM 16.4) and 25 other tissues"
+Chicken_ATP6V0D2_exp <- "(in human ortholog) Biased expression in kidney (RPKM 22.7) and colon (RPKM 1.1)"  
+Chicken_OSTN_exp <- "(in human ortholog) Low expression observed in reference dataset"
+
+Human_PAX8_full <- "paired box 8"
+Human_FKBP11_full <- "FKBP prolyl isomerase 11"  
+Human_ZNF646_full <- "zinc finger protein 646"
+Human_RRP7A_full <- "ribosomal RNA processing 7 homolog A"  
+`Human_RP6-170F5_full` <- "(now SERTM2) serine rich and transmembrane domain containing 2" 
+
+# `Human_RP3-336H9_full` <- "retinitis pigmentosa GTPase regulator"
+
+Human_PAX8_sum <- "This gene encodes a member of the paired box (PAX) family of transcription factors. Members of this gene family typically encode proteins that contain a paired box domain, an octapeptide, and a paired-type homeodomain. This nuclear protein is involved in thyroid follicular cell development and expression of thyroid-specific genes. Mutations in this gene have been associated with thyroid dysgenesis, thyroid follicular carcinomas and atypical follicular thyroid adenomas. Alternatively spliced transcript variants encoding different isoforms have been described."
+Human_FKBP11_sum <- "FKBP11 belongs to the FKBP family of peptidyl-prolyl cis/trans isomerases, which catalyze the folding of proline-containing polypeptides. The peptidyl-prolyl isomerase activity of FKBP proteins is inhibited by the immunosuppressant compounds FK506 and rapamycin (Rulten et al., 2006 [PubMed 16596453])."  
+Human_ZNF646_sum <- "Predicted to enable DNA-binding transcription factor activity, RNA polymerase II-specific and RNA polymerase II cis-regulatory region sequence-specific DNA binding activity. Predicted to be involved in regulation of transcription, DNA-templated. Predicted to be located in nucleus. [provided by Alliance of Genome Resources, Apr 2022]"
+Human_RRP7A_sum <- "Enables RNA binding activity. Predicted to be involved in rRNA processing and ribosomal small subunit assembly. Predicted to act upstream of or within blastocyst formation. Predicted to be located in nucleoplasm. Predicted to be part of CURI complex and UTP-C complex. Implicated in primary autosomal recessive microcephaly. [provided by Alliance of Genome Resources, Apr 2022]"  
+`Human_RP6-170F5_sum` <- "(SERTM2) Predicted to be integral component of membrane. Predicted to be active in intracellular membrane-bounded organelle."  
+
+Human_PAX8_exp <- "Biased expression in thyroid (RPKM 261.2) and kidney (RPKM 40.3)"
+Human_FKBP11_exp <- "Ubiquitous expression in pancreas (RPKM 27.0), appendix (RPKM 17.8) and 24 other tissues"  
+Human_ZNF646_exp <- "Broad expression in testis (RPKM 13.8), spleen (RPKM 4.2) and 23 other tissues "
+Human_RRP7A_exp <- "Ubiquitous expression in ovary (RPKM 9.4), lymph node (RPKM 9.3) and 25 other tissues "  
+`Human_RP6-170F5_exp` <- "(SERTM2) Biased expression in endometrium (RPKM 22.3), prostate (RPKM 6.6) and 1 other tissue"
+```
+
+```{r}
+## make table of genes 
+gene_table <- psc_data %>%
+  mutate(organism = ifelse(model == "Fish", 
+                           "Zebrafish", 
+                           ifelse(model=="Reptile", 
+                                  "Chicken", 
+                                  "Human"))) %>%
+  select(model, organism, name) %>%
+  rename(gene_name = name) %>%
+  mutate(full_name = case_when(
+    ## AV
+    organism == "Human" & gene_name == "LHX8" ~ Human_LHX8_full, 
+    organism == "Human" & gene_name == "SLITRK6" ~ Human_SLITRK6_full, 
+    organism == "Human" & gene_name == "CXorf38" ~ Human_CXorf38_full, 
+    organism == "Human" & gene_name == "RP3-336H9" ~ `Human_RP3-336H9_full`, 
+    organism == "Human" & gene_name == "CARF" ~ Human_CARF_full, 
+    ## F
+    organism == "Zebrafish" & gene_name == "hoxc11a" ~ Zebrafish_hoxc11a_full, 
+    organism == "Zebrafish" & gene_name == "dpf1" ~ Zebrafish_dpf1_full,
+    organism == "Zebrafish" & gene_name == "hoxc3a" ~ Zebrafish_hoxc3a_full,
+    organism == "Zebrafish" & gene_name == "map2k7" ~ Zebrafish_map2k7_full,
+    organism == "Zebrafish" & gene_name == "kmt2a" ~ Zebrafish_kmt2a_full,
+    ## MM
+    organism == "Human" & gene_name == "PAX8" ~ Human_PAX8_full,
+    organism == "Human" & gene_name == "FKBP11" ~ Human_FKBP11_full,
+    organism == "Human" & gene_name == "ZNF646" ~ Human_ZNF646_full,
+    organism == "Human" & gene_name == "RRP7A" ~ Human_RRP7A_full,
+    organism == "Human" & gene_name == "RP6-170F5" ~ `Human_RP6-170F5_full`,
+    ## R
+    organism == "Chicken" & gene_name == "APOH" ~ Chicken_APOH_full,
+    organism == "Chicken" & gene_name == "HSP90AB1" ~ Chicken_HSP90AB1_full,
+    organism == "Chicken" & gene_name == "TM9SF4" ~ Chicken_TM9SF4_full,
+    organism == "Chicken" & gene_name == "ATP6V0D2" ~ Chicken_ATP6V0D2_full,
+    organism == "Chicken" & gene_name == "OSTN" ~ Chicken_OSTN_full)) %>%
+  mutate(summary = case_when(
+    ## AV
+    organism == "Human" & gene_name == "LHX8" ~ Human_LHX8_sum, 
+    organism == "Human" & gene_name == "SLITRK6" ~ Human_SLITRK6_sum, 
+    organism == "Human" & gene_name == "CXorf38" ~ Human_CXorf38_sum, 
+    organism == "Human" & gene_name == "RP3-336H9" ~ `Human_RP3-336H9_full`, 
+    organism == "Human" & gene_name == "CARF" ~ Human_CARF_sum, 
+    ## F
+    organism == "Zebrafish" & gene_name == "hoxc11a" ~ Zebrafish_hoxc11a_sum, 
+    organism == "Zebrafish" & gene_name == "dpf1" ~ Zebrafish_dpf1_sum,
+    organism == "Zebrafish" & gene_name == "hoxc3a" ~ Zebrafish_hoxc3a_sum,
+    organism == "Zebrafish" & gene_name == "map2k7" ~ Zebrafish_map2k7_sum,
+    organism == "Zebrafish" & gene_name == "kmt2a" ~ Zebrafish_kmt2a_sum,
+    ## MM
+    organism == "Human" & gene_name == "PAX8" ~ Human_PAX8_sum,
+    organism == "Human" & gene_name == "FKBP11" ~ Human_FKBP11_sum,
+    organism == "Human" & gene_name == "ZNF646" ~ Human_ZNF646_sum,
+    organism == "Human" & gene_name == "RRP7A" ~ Human_RRP7A_sum,
+    organism == "Human" & gene_name == "RP6-170F5" ~ `Human_RP6-170F5_sum`,
+    ## R
+    organism == "Chicken" & gene_name == "APOH" ~ Chicken_APOH_sum,
+    organism == "Chicken" & gene_name == "HSP90AB1" ~ Chicken_HSP90AB1_sum,
+    organism == "Chicken" & gene_name == "TM9SF4" ~ Chicken_TM9SF4_sum,
+    organism == "Chicken" & gene_name == "ATP6V0D2" ~ Chicken_ATP6V0D2_sum,
+    organism == "Chicken" & gene_name == "OSTN" ~ Chicken_OSTN_sum)) %>%
+  mutate(expression = case_when(
+    ## AV
+    organism == "Human" & gene_name == "LHX8" ~ Human_LHX8_exp, 
+    organism == "Human" & gene_name == "SLITRK6" ~ Human_SLITRK6_exp, 
+    organism == "Human" & gene_name == "CXorf38" ~ Human_CXorf38_exp, 
+    organism == "Human" & gene_name == "RP3-336H9" ~ `Human_RP3-336H9_exp`, 
+    organism == "Human" & gene_name == "CARF" ~ Human_CARF_exp, 
+    ## F
+    organism == "Zebrafish" & gene_name == "hoxc11a" ~ Zebrafish_hoxc11a_exp, 
+    organism == "Zebrafish" & gene_name == "dpf1" ~ Zebrafish_dpf1_exp,
+    organism == "Zebrafish" & gene_name == "hoxc3a" ~ Zebrafish_hoxc3a_exp,
+    organism == "Zebrafish" & gene_name == "map2k7" ~ Zebrafish_map2k7_exp,
+    organism == "Zebrafish" & gene_name == "kmt2a" ~ Zebrafish_kmt2a_exp,
+    ## MM
+    organism == "Human" & gene_name == "PAX8" ~ Human_PAX8_exp,
+    organism == "Human" & gene_name == "FKBP11" ~ Human_FKBP11_exp,
+    organism == "Human" & gene_name == "ZNF646" ~ Human_ZNF646_exp,
+    organism == "Human" & gene_name == "RRP7A" ~ Human_RRP7A_exp,
+    organism == "Human" & gene_name == "RP6-170F5" ~ `Human_RP6-170F5_exp`,
+    ## R
+    organism == "Chicken" & gene_name == "APOH" ~ Chicken_APOH_exp,
+    organism == "Chicken" & gene_name == "HSP90AB1" ~ Chicken_HSP90AB1_exp,
+    organism == "Chicken" & gene_name == "TM9SF4" ~ Chicken_TM9SF4_exp,
+    organism == "Chicken" & gene_name == "ATP6V0D2" ~ Chicken_ATP6V0D2_exp,
+    organism == "Chicken" & gene_name == "OSTN" ~ Chicken_OSTN_exp)) 
+
+write.csv(gene_table, "figuresTables/Table S[gene_table].csv", row.names=FALSE)
+```
+
+```{r}
+gene_table_sum <- gene_table %>%
+  mutate(is_homeobox = ifelse(grepl("homeobox", full_name), 
+                             "yes", "no"),
+         exp_testis = ifelse(grepl("test", expression), 
+                             "yes", "no"),
+         exp_ovary = ifelse(grepl("ova", expression), 
+                             "yes", "no"),
+         exp_liver = ifelse(grepl("liver", expression), 
+                             "yes", "no"),
+         exp_thyroid = ifelse(grepl("thyroid", expression), 
+                             "yes", "no"),
+         exp_brain = ifelse(grepl("brain", expression), 
+                             "yes", "no")) %>%
+  select(gene_name, full_name, 
+         is_homeobox, 
+         starts_with("exp_"))
+
+```
+
+```{r}
+print("homeobox genes")
+paste0(gene_table_sum %>% filter(., is_homeobox == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., is_homeobox == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+print("biased expression in testis")
+paste0(gene_table_sum %>% filter(., exp_testis == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., exp_testis == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+print("biased expression in ovaries")
+paste0(gene_table_sum %>% filter(., exp_ovary == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., exp_ovary == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+print("biased expression in liver")
+paste0(gene_table_sum %>% filter(., exp_brain == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., exp_brain == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+print("biased expression in brain")
+paste0(gene_table_sum %>% filter(., exp_brain == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., exp_brain == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+print("biased expression in thyroid")
+paste0(gene_table_sum %>% filter(., exp_thyroid == "yes") %>% pull(gene_name), collapse=", ")
+paste0(gene_table_sum %>% filter(., exp_thyroid == "yes") %>% pull(full_name), collapse=", ")
+```
+
+```{r}
+## END SCRIPT
+```
+
+

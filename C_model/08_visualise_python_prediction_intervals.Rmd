@@ -1,0 +1,208 @@
+---
+title: "visualise prediction intervals"
+author: "Alyssa"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r warning=FALSE, message=FALSE}
+## load libraries
+library(reticulate)
+library(viridis)
+library(ggpubr)
+library(tidyverse)
+```
+
+```{r}
+## IMPORT, FORMAT AND EXPORT DATA ----
+
+## define models ----
+models <- c("allhomo",
+            "fishdanio", 
+            "mammalshomo", 
+            "reptilesgallus")
+
+# models <- c("allhomo")
+
+## pheno/results ----
+pheno_all <- NULL
+for (mod in models){
+  
+  ## import data
+  temp_pheno <- 
+    read.csv(paste0("dataFiles/07.00_bagged_phenoresults_test_", mod, ".csv"))
+  
+  ## combine
+  pheno_all <- bind_rows(pheno_all, temp_pheno)
+  
+  ## name it
+  assign(paste0("pheno_", mod), temp_pheno)
+}
+```
+
+```{r message=FALSE}
+## get python data
+models <- c("vertebrate",
+            "fishdanio", 
+            "mammalshomo", 
+            "reptilesgallus")
+
+## import python data
+wd <- "../life_pi/outputs/"
+
+## import pandas
+pd <- import("pandas")
+
+## loop through 4 models
+python_preds <- NULL
+for (mod in models) {
+  
+  ## get list of folders 
+  folders <- list.files(paste0(wd, mod))
+  my_folders <- folders[!grepl("pred", folders)]
+  
+  temp_data_all <- NULL
+  
+  for (fldr in seq_along(my_folders)) {
+    fldr_name <- my_folders[fldr]
+    
+    ## get name of relevant file
+    files <- list.files(paste0(wd, mod, "/", my_folders[fldr]))
+    split_file <- files[grepl("split", files)]
+    my_file <- files[grepl("pred", files)]
+    
+    ## temp split file
+    temp_split <- pd$read_pickle(paste0(wd, mod,"/",  my_folders[fldr], "/", split_file))
+    
+    ## import files
+    temp_pkl_other <- pd$read_pickle(paste0(wd, mod, "/", my_folders[fldr], "/", my_file))
+    temp_pkl <- pd$read_pickle(paste0(wd, mod, "/", my_folders[fldr], "/", my_file))[[3]]
+    temp_naive <- data.frame(temp_pkl$naive) %>% mutate(method = "Naive")
+    temp_jackknife <- data.frame(temp_pkl$jackknife_plus_ab) %>% mutate(method = "Jackknife+ab")
+    temp_cv <- data.frame(temp_pkl$cv) %>% mutate(method = "CV")
+    
+    ## bind data for all methods
+    temp_data <- full_join(temp_naive, temp_jackknife) %>%
+      full_join(temp_cv) %>%
+      mutate(bagged_mod_num = fldr_name)
+    
+    ## bind data for all bagged models
+    temp_data_all <- rbind(temp_data, temp_data_all)
+  }
+  
+  ## get predictions (median)
+  temp_preds <- temp_data_all %>%
+    group_by(method, target) %>%
+    summarise(median_pred = median(pred), 
+              median_upper = median(upper),
+              median_lower = median(lower)) %>%
+    mutate(model = mod) %>%
+    ungroup(.)
+  
+  ## combine
+  python_preds <- rbind(python_preds, temp_preds)
+}
+```
+
+```{r}
+## create plot data 
+plot_data <- full_join(python_preds %>%
+  mutate(model = ifelse(model == "vertebrate", 
+                         "allhomo", 
+                         model)) %>%
+    mutate(mean_age_mat = round(target, digits=3)), 
+  pheno_all %>%
+    ungroup(.) %>%
+    select(mean_age_mat, organism_name, bagged_detrans_predicted_age_mat, 
+           initial_split, model, model_labs, bagged_detrans_absolute_error) %>%
+    mutate(mean_age_mat = round(mean_age_mat, digits=3))) %>%
+  group_by(model, method) %>%
+  mutate(ci = ifelse(target >= median_lower & 
+                       target <= median_upper, 1, 0),
+         ## for MPIW
+         interval_widths = median_upper - median_lower,
+         ## for percent MPIW
+         interval_pred_ratio = interval_widths / target,
+         ## mean prediction interval width
+         MPIW = round(mean(interval_widths), digits=2),
+         ## mean prediction interval width (as proportion)
+         MPIWP = round(mean(interval_pred_ratio), digits=2),
+         ## prediction interval coverage proportion
+         PICP = round(sum(ci) / length(ci), digits=2), 
+         plot_label = paste0("PICP=", PICP, "; MPIW=", MPIW, " (", MPIWP, ")"))
+```
+
+```{r fig.height=10.5, fig.width=8.75}
+## define colours
+fish_clr <- viridis_pal(option="D", direction=-1)(4)[2]
+maml_clr <- viridis_pal(option="D", direction=-1)(4)[3]
+rptl_clr <- viridis_pal(option="D", direction=-1)(4)[4]
+
+# Assuming you have a data frame 'data' with columns 'x', 'y', 'upper', 'lower'
+ggplot(plot_data, aes(x =  mean_age_mat,
+                      colour=model,
+                      fill=model,
+                      y =  bagged_detrans_predicted_age_mat)) + 
+  geom_point(alpha = 0.5) +
+  geom_line(linetype = "dotted") +
+  geom_ribbon(aes(ymin = median_lower, ymax = median_upper), alpha = 0.2, linewidth=0) + 
+  scale_colour_manual(values=c("grey50", fish_clr, maml_clr, rptl_clr), guide=F)+
+  scale_fill_manual(values=c("grey50", fish_clr, maml_clr, rptl_clr), guide=F)+
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey70") +
+  theme_bw() +
+  labs(x = "Known age at matuirty (years)", y = "Predicted age at maturity (years)") +
+  facet_wrap(vars(model_labs, method), 
+             scales="free",
+             ncol=3)+
+  scale_y_log10()+
+  scale_x_log10()+
+  geom_text(aes(x=0, y=Inf, label=plot_label), 
+            hjust = -0.05,
+            vjust = 1.5,
+            size=3,
+            colour="black",
+            check_overlap = T)+
+  ## to make x and y axis similar
+  geom_blank(aes(x=bagged_detrans_predicted_age_mat, 
+                 y=mean_age_mat))
+
+ggsave("figuresTables/Figure S[pred_int].pdf",
+       width=8.75,
+       height=10.5,
+       units="in")
+
+ggsave("figuresTables/Figure S[pred_int].png",
+       width=8.75,
+       height=10.5,
+       units="in")
+```
+
+```{r}
+## create table
+table <- plot_data %>%
+  ungroup(.) %>%
+  select(model_labs, method, MPIW, MPIWP, PICP) %>%
+  unique(.) %>%
+  pivot_wider(names_from="method",
+              values_from=c("MPIW", "MPIWP", "PICP"))
+
+names(table) <- gsub("_", "\n", names(table))
+  
+knitr::kable(table, format="html")
+```
+
+```{r}
+## END SCRIPT
+```
+
+

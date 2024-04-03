@@ -1,0 +1,963 @@
+---
+title: "glmnet cv results"
+author: "Alyssa"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r warning=FALSE, message=FALSE}
+## load libraries
+library(viridis)
+library(ggrepel)
+library(ggpubr)
+library(ggimage)
+library(tidyverse)
+library(grid)
+
+## specify group colours
+fish_colour <- scales::viridis_pal(option="D")(4)[3]
+mammals_colour <- scales::viridis_pal(option="D")(4)[2]
+reptiles_colour <- scales::viridis_pal(option="D")(4)[1]
+```
+
+```{r}
+## IMPORT, FORMAT AND EXPORT DATA ----
+
+## define models ----
+models <- c("allhomo", "fishdanio", "mammalshomo", "reptilesgallus")
+
+# models <- c("allhomo")
+
+## pheno/results ----
+glmnetcv_phenoresults_all <- NULL
+for (mod in models){
+  
+  glmnetcv_phenoresults_temp <- 
+    read.csv(paste0("dataFiles/07.00_glmnetcv_phenoresults_", mod, ".csv"))
+  
+  glmnetcv_phenoresults_all <- rbind(glmnetcv_phenoresults_temp, 
+                                     glmnetcv_phenoresults_all)
+  
+  glmnet_phenoresults_temp <- 
+    read.csv(paste0("dataFiles/07.00_glmnet_phenoresults_", mod, ".csv"))
+  
+  assign(paste0("glmnetcv_phenoresults_", mod), glmnetcv_phenoresults_temp)
+  
+  assign(paste0("glmnet_phenoresults_", mod), glmnet_phenoresults_temp)
+  
+}
+
+## parameters ----
+
+## import model parameters and combine
+glmnetcv_params <- NULL
+for (mod in models){
+  temp_data <- read.csv(paste0("dataFiles/07.00_glmnetcv_parameters_", mod, ".csv")) %>%
+    mutate(model=mod) %>%
+    mutate(model_labs=ifelse(model=="allhomo", "All-vertebrate", 
+                             ifelse(model=="mammalshomo", "Mammal", 
+                                    ifelse(model=="reptilesgallus", "Reptile", 
+                                           ifelse(model=="fishdanio", "Fish", 
+                                                  "error"))))) %>%
+    mutate(sig_diff_error_yn=ifelse(sig_diff_error_detrans > 0.05, "No", "Yes"))
+  glmnetcv_params <- rbind(glmnetcv_params, temp_data)
+}
+
+## format combined parameter data
+glmnetcv_params_long <- glmnetcv_params %>%
+  pivot_longer(., alpha_min:sig_diff_error_detrans) %>%
+  filter(name != "lambda_min")
+
+## correlations ----
+
+## import model parameters and combine
+glmnetcv_corrs <- NULL
+for (mod in models){
+  print(mod)
+  temp_data <- read.csv(paste0("dataFiles/07.00_glmnetcv_correlations_", 
+                               mod, ".csv")) %>%
+    mutate(estimate_sqrd_validate=estimate_validate^2,
+           estimate_sqrd_train=estimate_train^2) %>%
+    mutate(model=mod) %>%
+    mutate(model_labs=ifelse(model=="allhomo", "All-vertebrate", 
+                             ifelse(model=="mammalshomo", "Mammal", 
+                                    ifelse(model=="reptilesgallus", "Reptile", 
+                                           ifelse(model=="fishdanio", "Fish", 
+                                                  "error")))))
+  glmnetcv_corrs <- rbind(glmnetcv_corrs, temp_data)
+}
+
+## format combined correlation data
+glmnetcv_corrs_long <- left_join(glmnetcv_corrs, 
+                                 glmnetcv_params %>% 
+                                   select(model_number, model_labs, sig_diff_error_yn)) %>%
+  select(-c(null.value_train, null.value_validate,
+            alternative_train, alternative_validate,
+            method_train, method_validate,
+            data.name_train, data.name_validate,
+            parameter_train, parameter_validate,
+            conf_0_train, conf_1_train,
+            conf_0_validate, conf_1_validate, 
+            response, 
+            statistic_train, mse_train, mae_train, 
+            statistic_validate, mse_validate, mae_validate)) %>%
+  pivot_longer(., p.value_train:estimate_sqrd_train)
+```
+
+```{r}
+## stats for results
+print("Maximum p-value (all models)")
+max(glmnetcv_corrs_long %>% 
+      filter(name == "p.value_train" | name == "p.value_validate") %>%
+      pull(value))
+
+print("Minimum R (all models)")
+min(glmnetcv_corrs_long %>% 
+      filter(name == "estimate_train" | name == "estimate_validate") %>%
+      pull(value))
+```
+
+```{r fig.width=8, fig.height=11}
+## create colours that correspond to "category"
+cols <- c("grey30", 
+          viridis_pal(option="D", direction=-1)(4)[2], 
+          viridis_pal(option="D", direction=-1)(4)[3],
+          viridis_pal(option="D", direction=-1)(4)[4])
+
+counter <- 0
+for (mod in models) {
+  
+  counter <- counter+1
+  
+  temp_data <- get(paste0("glmnetcv_phenoresults_", mod)) %>%
+    group_by(model_number_labs, trainval_split_labs) %>%
+    mutate(squared_error = (log_age_mat - log_predicted_age_mat)^2) %>%
+    mutate(rmse = (sqrt(mean(squared_error))))
+  
+  ymax <- max(temp_data$log_predicted_age_mat)
+  xmin <- min(temp_data$log_age_mat)
+  
+  clr <- cols[counter]
+  
+  scorr <- ggscatter(data=temp_data,
+                     x="log_age_mat", 
+                     y="log_predicted_age_mat", 
+                     add="reg.line", 
+                     xlab="Known age at maturity (ln)",
+                     ylab="Predicted age at maturity (ln)",
+                     shape=21, 
+                     size=1.5, 
+                     # fill="grey",
+                     fill=clr,
+                     alpha=0.7,
+                     facet.by=c("model_number_labs", "trainval_split_labs"),
+                     ggtheme=theme_bw(),
+                     legend="bottom")+ 
+    stat_cor(aes(label=paste(after_stat(r.label),
+                             ..rr.label..,
+                             ..p.label..,
+                             sep="~`,`~")),
+             method="spearman",
+             size=2.5,
+             label.y=ymax*0.99,
+             label.sep='\n')+
+    ggtitle(paste(temp_data$model_labs[1], "model"))+
+    geom_text(x=xmin, 
+              y=ymax*0.8, 
+              size=2.5,
+              hjust=0,
+              check_overlap = TRUE,
+              aes(label=paste0("RMSE: ", 
+                               round(rmse, digits=2))))
+  
+  # print(scorr)
+  assign(paste0("scorr_", mod), scorr)
+  
+  # ggsave(paste0("figuresTables/Figure S[corr_", mod, "].png"), 
+  #        scorr, width = 8.75, height = 11.25*0.9, units="in")
+}
+```
+
+```{r fig.width=16, fig.height=18}
+scorr_combo <- ggarrange(scorr_allhomo, scorr_fishdanio, scorr_mammalshomo, scorr_reptilesgallus, 
+          nrow=1)
+scorr_combo
+
+ggsave(paste0("figuresTables/Figure S[corr_all].png"),
+       scorr_combo, width = 16, height = 18, units="in")
+```
+
+```{r fig.width=8, fig.height=11}
+## get means and p-values for annotation
+
+## error plots
+counter <- 0
+for (mod in models) {
+  
+  counter <- counter+1
+  clr <- cols[counter]
+  
+  anno_mae <- glmnetcv_corrs %>%
+    filter(model == mod) %>%
+    select(model_number, medae_detrans_train, medae_detrans_validate) %>%
+    pivot_longer(., cols=c("medae_detrans_train", "medae_detrans_validate"), 
+                 values_to="MedAE") %>%
+    mutate(trainval_split_labs=ifelse(name=="medae_detrans_train", 
+                                      "Training", 
+                                      "Validation"), 
+           MedAE=round(MedAE, digits=2)) %>%
+    left_join(get(paste0("glmnetcv_phenoresults_", mod)) %>%
+                select(model_number, model_number_labs) %>%
+                unique(.))
+  
+  anno_pval <- glmnetcv_params %>%
+    filter(model == mod) %>%
+    select(model_number, 
+           sig_diff_error_detrans, sig_diff_error_yn,
+           sig_diff_error_detrans) %>%
+    left_join(get(paste0("glmnetcv_phenoresults_", mod)) %>%
+                select(model_number, model_number_labs) %>%
+                unique(.))
+  
+  temp_data <- get(paste0("glmnetcv_phenoresults_", mod))
+  
+  err <- ggplot(data=temp_data,
+                aes(x=trainval_split_labs, y=detrans_absolute_error))+
+    labs(x="Data", y="Absolute error (years)")+
+    scale_y_log10()+
+    geom_boxplot()+
+    geom_jitter(pch=21, size=1.5, fill=clr)+
+    theme_bw()+
+    facet_grid(rows=vars(model_number_labs))+
+    ggtitle(paste(temp_data$model_labs[1], "model"))+
+    theme(axis.title.x=element_blank())+
+    geom_label(data=anno_mae, aes(x=trainval_split_labs, y=MedAE, label=MedAE))+
+    geom_text(data=anno_pval, 
+              aes(x=1.5, y=0.001, colour=sig_diff_error_yn,
+                  label=paste0("p=", round(sig_diff_error_detrans, digits=2))))+
+    scale_colour_manual(values=c("Yes"="darkred", 
+                                 "No"="darkgreen"), name="Significant\ndifference?")
+  
+  # print(err)
+  assign(paste0("err_", mod), err)
+  
+  # ggsave(paste0("figuresTables/Figure S[err_", mod, "].png"), 
+  #        err, width = 8.75, height = 11.25*0.9, units="in")
+}
+```
+
+```{r fig.width=16, fig.height=18}
+err_combo <- ggarrange(err_allhomo, err_fishdanio, err_mammalshomo, err_reptilesgallus, 
+          nrow=1, common.legend=TRUE)
+err_combo
+
+ggsave(paste0("figuresTables/Figure S[err_all].png"),
+       err_combo, width = 16, height = 18, units="in")
+```
+
+```{r}
+## TTEST FUNCTION ----
+
+## t-test and variance test function (transform skewed data)
+tTestTrans <- function(df1, df2, values) {
+  
+  ## perform f-test to determine
+  var <- var.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  alternative="two.sided")
+  
+  ## perform t-test based on variances
+  if (var$p.value >= 0.05) {
+    # print("variance equal")
+    res <- t.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  var.equal=TRUE, ## equal (null)
+                  paired=FALSE)
+  } else {
+    # print("variance unequal")
+    res <- t.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  var.equal=FALSE, ## unequal (alt)
+                  paired=FALSE)
+  }
+  
+  res$p.value
+}
+
+```
+
+```{r fig.width=9, fig.height=6}
+## compare trainval vs train predictions
+
+plot_list <- list()
+counter <- 0
+for (mod in models) {
+  
+  counter <- counter+1
+  
+  fit_train <- get(paste0("glmnetcv_phenoresults_", mod)) %>%
+    mutate(fit="Model fit to training data only") %>%
+    group_by(organism_name) %>%
+    mutate(bagged_detrans_predicted_age_mat=median(detrans_predicted_age_mat), 
+           bagged_detrans_absolute_error=abs(bagged_detrans_predicted_age_mat-mean_age_mat)) %>%
+    select(organism_name, bagged_detrans_predicted_age_mat, bagged_detrans_absolute_error, fit) %>%
+    unique(.)
+  
+  
+  fit_trainval <- get(paste0("glmnet_phenoresults_", mod)) %>%
+    mutate(fit="Model fit to training and validation data")  %>%
+    group_by(organism_name) %>%
+    mutate(bagged_detrans_predicted_age_mat=median(detrans_predicted_age_mat), 
+           bagged_detrans_absolute_error=abs(bagged_detrans_predicted_age_mat-mean_age_mat)) %>%
+    select(organism_name, bagged_detrans_predicted_age_mat, bagged_detrans_absolute_error, fit) %>%
+    unique(.)
+  
+  
+  fit <- bind_rows(fit_train, fit_trainval) %>%
+    pivot_longer(cols=c(bagged_detrans_predicted_age_mat, bagged_detrans_absolute_error)) %>%
+    pivot_wider(names_from=fit) %>%
+    mutate(name=gsub("bagged_detrans_predicted_age_mat", "Predicted age at maturity (years)", name) %>%
+             gsub("bagged_detrans_absolute_error", "Absolute error (years)", .))
+  
+  fp <- ggplot(fit, 
+               aes(x=`Model fit to training data only`, y=`Model fit to training and validation data`))+
+    geom_point()+
+    facet_wrap(~name, scales="free")+
+    theme_bw()+
+    ggtitle(mod)+
+    stat_cor(aes(label=paste(after_stat(r.label), ..rr.label.., ..p.label.., sep="~`,`~")), 
+             method="spearman",
+             size=2.5)
+  
+  plot_list[[counter]] <- fp
+  
+  # print(err)
+}
+
+ggarrange(plotlist=plot_list, ncol=2, nrow=2, common.legend=TRUE)
+
+```
+
+```{r fig.width=8.25, fig.height=10}
+## PLOT MODEL PARAMETERS (1) ----
+
+## facet labels
+nice_labels <- c(alpha_min="Alpha",
+                 lambda_1se="Lambda 1se", 
+                 mse_min="Minimum mean squared error", 
+                 num_pred_proms="Number of features", 
+                 sig_diff_error_detrans="P-value for absolute error t-test: training — validation")
+
+## plot
+ocv_params_1 <- ggplot(glmnetcv_params_long, 
+                       aes(x=model_number, 
+                           y=value, 
+                           colour=model_labs,
+                           label=round(value, digits=3))) +
+  scale_y_log10()+
+  scale_colour_manual(values=cols)+
+  geom_line(linewidth=0.25)+
+  geom_point(aes(shape=sig_diff_error_yn))+
+  scale_shape_manual(values=c(19,4))+
+  geom_text_repel(size=2, angle=30, point.padding=5)+
+  facet_wrap("name", scales="free_y", ncol=1, labeller=as_labeller(nice_labels))+
+  scale_x_continuous(breaks=seq(0, 10, by=1))+
+  labs(x="Model number", y="Value", shape="Overfit", colour="Group")+
+  theme_bw()+ 
+  theme(strip.text.x=element_text(margin=margin(0.1,0.1,0.1,0.1, "cm")))
+
+ocv_params_1
+
+ggsave(paste0("figuresTables/Figure S[ocv_pl].png"),
+       width=8.25,
+       height=10,
+       units="in")
+```
+
+```{r}
+## CV FULL TABLE ----
+
+## full table with everything
+cv_metrics_raw <- full_join(glmnetcv_params_long, 
+                            glmnetcv_corrs_long) %>%
+  select(-c(response)) %>%
+  pivot_wider() %>%
+  relocate(model_labs, model_number, sig_diff_error_detrans, sig_diff_error_yn, 
+           alpha_min, lambda_1se, mse_min, num_pred_proms, 
+           estimate_train, estimate_validate, 
+           estimate_sqrd_train, estimate_sqrd_validate, 
+           p.value_train, p.value_validate) %>%
+  select(-medae_train, -medae_validate, -sig_diff_error_yn, -model) %>%
+  rename(`Model number`=model_number,
+         `Model`=model_labs,
+         `Minimum alpha`=alpha_min, 
+         `Lambda 1se`=lambda_1se, 
+         `Mean squared error (MSE)`=mse_min, 
+         `No. features`=num_pred_proms,
+         `P-value: validation error -- train error`=sig_diff_error_detrans,
+         `P-value (training)`=p.value_train, 
+         `P-value (validation)`=p.value_validate,
+         `R (training)`=estimate_train, 
+         `R (validation)`=estimate_validate, 
+         `R^2 (validation)`=estimate_sqrd_validate, 
+         `R^2 (training)`=estimate_sqrd_train, 
+         `Median absolute error (training data)` = medae_detrans_train, 
+         `Median absolute error (validation data)` = medae_detrans_validate) %>%
+  mutate(Model = gsub("Fish", "Fish-specific", Model) %>%
+           gsub("Mammal", "Mammal-specific", .) %>%
+           gsub("Reptile", "Reptile-specific", .))
+
+write.csv(cv_metrics_raw, "figuresTables/Table S[cv_metrics_raw].csv", row.names=FALSE)
+
+## CV MEANS MEDIANS TABLE ----
+
+glmnetcv_full_long <- full_join(glmnetcv_params_long, 
+                                glmnetcv_corrs_long) %>%
+  select(-c(response))
+
+## pvals first because rounding doesnt work
+all_models_pvals<-glmnetcv_full_long %>%
+  select(model_labs, name, value) %>%
+  group_by(model_labs, name) %>%
+  filter(name == "p.value_validate" | name == "p.value_train") %>%
+  summarise(`Mean (SD)`=paste0(signif(mean(value), digits=3), 
+                               " (", signif(sd(value), digits=3), ")"),
+            `Median [min, max]`= paste0(signif(median(value), digits=3), 
+                                        " [", signif(min(value), digits=3), ", ",
+                                        signif(max(value), digits=3), "]")) %>%
+  ungroup(.) %>%
+  arrange(name) 
+
+## table with mean SD and bagged means sd
+all_models_new<-glmnetcv_full_long %>%
+  select(model_labs, name, value) %>%
+  group_by(model_labs, name) %>%
+  summarise(`Mean (SD)`=paste0(round(mean(value), digits=2), 
+                               " (", round(sd(value), digits=2), ")"),
+            `Median [min, max]`= paste0(round(median(value), digits=2), 
+                                        " [", round(min(value), digits=2), ", ",
+                                        round(max(value), digits=2), "]")) %>%
+  ungroup(.) %>%
+  arrange(name) %>%
+  filter(name != "p.value_validate") %>%
+  filter(name != "p.value_train") %>%
+  full_join(., all_models_pvals)
+
+
+cv_metrics <- all_models_new %>%
+  filter(., name != "medae_train" & name != "medae_validate") %>%
+  mutate(name=gsub("alpha_min", "Alpha", name) %>%
+           gsub("lambda_1se", "Lambda 1se", .) %>%
+           gsub("mse_min", "Mean squared error (MSE)", .) %>%
+           gsub("medae_detrans_train", "Median absolute error (training data)", .) %>%
+           gsub("medae_detrans_validate", "Median absolute error (validation data)", .) %>%
+           gsub("num_pred_proms", "No. features", .) %>%
+           gsub("sig_diff_error_detrans", "P-value: train error -- validation error", .) %>%
+           gsub("estimate_train", "R (training data)", .) %>%
+           gsub("estimate_validate", "R (validation data)", .) %>%
+           gsub("p.value_train", "P-value (training data)", .) %>%
+           gsub("p.value_validate", "P-value (validation data)", .) %>%
+           gsub("estimate_sqrd_train", "R^2 (training data)", .) %>%
+           gsub("estimate_sqrd_validate", "R^2 (validation data)", .)) %>%
+  rename(Model=model_labs, 
+         Metric=name) %>%
+  mutate(Model = gsub("Fish", "Fish-specific", Model) %>%
+           gsub("Mammal", "Mammal-specific", .) %>%
+           gsub("Reptile", "Reptile-specific", .)) %>%
+  arrange(., Model)
+
+write.csv(cv_metrics, "figuresTables/Table S[cv_metrics].csv", row.names=FALSE)
+```
+
+```{r}
+## pheno/results ----
+for (mod_tl in models){
+  
+  ## import pheno data and results
+  bagged_phenoresults_test <-
+    read.csv(paste0("dataFiles/07.00_bagged_phenoresults_test_", mod_tl, ".csv"))
+  
+  assign(paste0("bagged_phenoresults_test_", mod_tl), bagged_phenoresults_test)
+  
+  bagged_phenoresults_trainval <- 
+    read.csv(paste0("dataFiles/07.00_bagged_phenoresults_", mod_tl, ".csv"))
+  
+  assign(paste0("bagged_phenoresults_trainval_", mod_tl), bagged_phenoresults_trainval)
+  
+}
+```
+
+
+```{r message=FALSE}
+## combine data
+bagged_phenoresults_all <- bagged_phenoresults_test_allhomo %>%
+  full_join(., bagged_phenoresults_test_fishdanio) %>%
+  full_join(., bagged_phenoresults_test_mammalshomo) %>%
+  full_join(., bagged_phenoresults_test_reptilesgallus) %>%
+  full_join(., bagged_phenoresults_trainval_allhomo) %>%
+  full_join(., bagged_phenoresults_trainval_fishdanio) %>%
+  full_join(., bagged_phenoresults_trainval_mammalshomo) %>%
+  full_join(., bagged_phenoresults_trainval_reptilesgallus) %>%
+  select(model_group, organism_name, mean_age_mat, 
+         bagged_detrans_predicted_age_mat, bagged_detrans_relative_error, 
+         model, model_labs, initial_split) %>%
+  mutate(initial_split_labs=gsub("trainValidate", "Training and validation data", initial_split) %>%
+           gsub("test", "Test data", .)) %>%
+  mutate(initial_split_labs=factor(initial_split_labs, levels=c("Training and validation data", "Test data")))
+
+## read in pics
+gallus <- ("../B_exploreData/phyloPics/Gallus-gallus-domesticus_Steven-Traver_CC0-1.0_aff847b0-ecbd-4d41-98ce-665921a6d96e_360x512_grey2.png")
+homo <- ("../B_exploreData/phyloPics/Homo-sapiens-sapiens_CC0-1.0_41b127f6-0824-4594-a941-5ff571f32378_219x512_grey2.png")
+danio <- ("../B_exploreData/phyloPics/Danio-rerio_Jake-Warner_CC0-1.0_e86bc377-3a6c-4efa-8703-1a12cb019ef7_512x176_grey2.png")
+
+## scaling for pics
+gallus_size <- 0.11
+homo_size <- 0.07
+danio_size <- 0.16
+```
+
+```{r}
+## calculate RMSE
+bagged_phenoresults_all <- bagged_phenoresults_all %>%
+  group_by(model, initial_split) %>%
+  mutate(squared_error = (log(mean_age_mat) - log(bagged_detrans_predicted_age_mat))^2, 
+         detrans_squared_error = (mean_age_mat - bagged_detrans_predicted_age_mat)^2) %>%
+  mutate(rmse = sqrt(mean(squared_error)), 
+         detrans_rmse = sqrt(mean(detrans_squared_error))) %>%
+  group_by(model, initial_split, model_group) %>%
+  mutate(squared_error_group = (log(mean_age_mat) - log(bagged_detrans_predicted_age_mat))^2, 
+         detrans_squared_error_group = (mean_age_mat - bagged_detrans_predicted_age_mat)^2) %>%
+  mutate(rmse_group = sqrt(mean(squared_error_group)), 
+         detrans_rmse_group = sqrt(mean(detrans_squared_error_group)))
+```
+
+
+```{r}
+max <- max(c(max(bagged_phenoresults_all %>% 
+                   filter(model == "allhomo") %>% 
+                   pull(bagged_detrans_predicted_age_mat))), 
+           max(bagged_phenoresults_all %>% 
+                 filter(model == "allhomo") %>% 
+                 pull(mean_age_mat)))
+
+group_rmse_lab <- bagged_phenoresults_all %>% 
+  filter(model == "allhomo") %>%
+  select(model_group, model, initial_split_labs, detrans_rmse_group) %>%
+  unique(.) %>%
+  arrange(., initial_split_labs, model_group)
+
+legend_labels <- c("*Danio rerio*",
+                   "*Gallus gallus*",
+                   "*Homo sapiens*")
+
+avtt <- ggscatter(data=bagged_phenoresults_all %>% filter(model == "allhomo"),
+                  x="mean_age_mat",
+                  y="bagged_detrans_predicted_age_mat",
+                  xlab="Known age at maturity (years)",
+                  ylab="Predicted age at maturity (years)",
+                  shape=21,
+                  alpha=0,
+                  size=1.75,
+                  fill=NULL, 
+                  colour=NULL,
+                  legend="bottom",
+                  legend.title="Group",
+                  ggtheme=theme_bw())+
+  scale_y_log10(limits=c(0.09, max))+
+  scale_x_log10(limits=c(0.09, max))+
+  geom_abline(intercept=0, slope=1, 
+              linetype="dashed", 
+              size=0.3,
+              alpha=0.5,
+              color="grey60")+ ## re-add the points on top of the line
+  geom_point(shape=21, alpha=0.5, size=1.75, 
+             aes(fill=model_group, colour=model_group))+
+  geom_smooth(aes(colour=model_group),
+              method="lm",
+              linewidth=0.75,
+              se=FALSE)+
+  facet_grid(.~initial_split_labs, scales="free")+
+  scale_fill_viridis_d(option="D", direction=-1)+
+  scale_colour_viridis_d(option="D", direction=-1, guide="none")+
+  # scale_colour_viridis_d(option="D", direction=-1)+
+  geom_smooth(method="lm",
+              linetype="F1",
+              linewidth=0.75,
+              colour="black",
+              se=FALSE)+
+  stat_cor(aes(colour=model_group,
+               label=paste(after_stat(r.label),
+                           after_stat(rr.label),
+                           after_stat(p.label),
+                           sep="~`,`~")),
+           method="spearman",
+           label.x.npc=0.48,
+           label.y.npc=0.225,
+           size=2.75)+
+  stat_cor(aes(label=paste(after_stat(r.label),
+                           after_stat(rr.label),
+                           after_stat(p.label),
+                           sep="~`,`~")),
+           method="spearman",
+           label.x.npc=0.48,
+           label.y.npc=0.29,
+           size=2.75)+
+  geom_text(x=-1.1, y=1.4, 
+            size=3,
+            hjust=0,
+            check_overlap = TRUE,
+            aes(label=paste0("RMSE: ", 
+                             round(detrans_rmse, digits=2))))+
+  geom_text(data=group_rmse_lab, 
+            x=-1.1, 
+            y=c(rep(c(1.25, 1.25-0.15, 1.25-0.3, 1.25-0.45), 2)), 
+            size=3, 
+            hjust=0,
+            check_overlap = TRUE,
+            aes(label=paste0("RMSE: ", 
+                             round(detrans_rmse_group, digits=2)), 
+                colour=model_group))+
+  theme(strip.background=element_blank(), 
+        strip.text=element_text(size=10), 
+        legend.position="top")
+
+# avtt
+```
+
+```{r}
+## calculate the coordinates for the images
+y_pos_av_trainval <- 1.8*min(ggplot_build(avtt)$plot$data$mean_age_mat) 
+x_pos_av_trainval <- 0.8*y_pos_av_trainval 
+y_pos_av_test <-  y_pos_av_trainval 
+x_pos_av_test <-  x_pos_av_trainval
+
+## add to plot 
+avttt <- avtt+
+  ggnewscale::new_scale_color() +
+  scale_color_manual(name = "Reference species", 
+                     labels = legend_labels, 
+                     values = c("grey50", "grey51", "grey52"))+
+  geom_image(data=data.frame(x=c(x_pos_av_trainval, x_pos_av_test, -10, -10),
+                             y=c(y_pos_av_trainval, y_pos_av_test, -10, -10),
+                             image=c(homo, homo, danio, gallus),
+                             ref_species = c("*Homo sapiens*", "*Homo sapiens*", "*Danio rerio*", "*Gallus gallus*"),
+                             initial_split_labs=c("Training and validation data", 
+                                                  "Test data")) %>%
+               mutate(initial_split_labs=factor(initial_split_labs, 
+                                                levels=c("Training and validation data", 
+                                                         "Test data"))),
+             aes(image=image,
+                 colour=ref_species,
+                 y=y,
+                 x=x),
+             size=0.05)+
+  guides(colour = guide_legend(title.position="top", title.hjust = 0.5, order=2),
+         fill = guide_legend(title.position="top", title.hjust = 0.5, order=1, 
+                             override.aes = list(size = 3)))+
+  theme(legend.title=element_text(size=9), 
+        legend.text=ggtext::element_markdown(size=7),
+        legend.margin=margin(0,0,-0.3,0, unit='cm'))
+
+# avttt
+```
+
+```{r fig.width=2.7, fig.height=4.5}
+max_fish <- max(c(max(bagged_phenoresults_all %>% 
+                        filter(model == "fishdanio") %>% 
+                        pull(bagged_detrans_predicted_age_mat))), 
+                max(bagged_phenoresults_all %>% 
+                      filter(model == "fishdanio") %>% 
+                      pull(mean_age_mat)))
+
+fishtt <- ggscatter(data=bagged_phenoresults_all %>%
+                      filter(model == "fishdanio"),
+                    x="mean_age_mat",
+                    y="bagged_detrans_predicted_age_mat",
+                    # add="reg.line",
+                    xlab="Known age at maturity (years)",
+                    ylab="Predicted age at maturity (years)",
+                    shape=21,
+                    alpha=0,
+                    size=1.75,
+                    ggtheme=theme_bw(),
+                    fill=NULL,
+                    legend="bottom",
+                    legend.title="Error (%)") +
+  scale_y_log10(limits=c(0.09, max_fish))+
+  scale_x_log10(limits=c(0.09, max_fish))+
+  geom_abline(intercept=0, slope=1, 
+              linetype="dashed", 
+              size=0.3,
+              alpha=0.5,
+              color="grey60")+
+  geom_point(shape=21, alpha=0.5, size=1.75, 
+             aes(fill=bagged_detrans_relative_error))+
+  geom_smooth(method="lm",
+              colour=fish_colour,
+              linewidth=0.75,
+              se=FALSE)+
+  scale_fill_gradient(high="grey95",
+                      low=fish_colour,
+                      trans="log",
+                      breaks=c(0.1, 1, 10, 100))+
+  facet_grid(initial_split_labs~., scales="free")+
+  stat_cor(aes(label=paste(after_stat(r.label),
+                           after_stat(rr.label),
+                           ..p.label..,
+                           sep="~`,`~")),
+           method="spearman",
+           label.x.npc=0.3,
+           label.y.npc=0.05,
+           size=2.25)+ 
+  theme(strip.background=element_blank(), 
+        legend.title=element_text(size=8),
+        legend.text=element_text(angle=90, hjust=1, size=6),
+        legend.key.height=unit(0.3, "cm"), 
+        legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
+  geom_text(x=-1.1, y=1.3, 
+            size=2.5,
+            hjust=0,
+            check_overlap = TRUE,
+            aes(label=paste0("RMSE: ", 
+                             round(detrans_rmse, digits=2))))
+
+# fishtt
+```
+
+```{r fig.width=2.7, fig.height=4.5}
+max_mammal <- max(c(max(bagged_phenoresults_all %>% 
+                          filter(model == "mammalshomo") %>% 
+                          pull(bagged_detrans_predicted_age_mat))), 
+                  max(bagged_phenoresults_all %>% 
+                        filter(model == "mammalshomo") %>% 
+                        pull(mean_age_mat)))
+
+mammaltt <- ggscatter(data=bagged_phenoresults_all %>%
+                        filter(model == "mammalshomo"),
+                      x="mean_age_mat",
+                      y="bagged_detrans_predicted_age_mat",
+                      # add="reg.line",
+                      xlab="Known age at maturity (years)",
+                      ylab="Predicted age at maturity (years)",
+                      shape=21,
+                      alpha=0,
+                      size=1.75,
+                      ggtheme=theme_bw(),
+                      fill=NULL,
+                      legend="bottom",
+                      legend.title="Error (%)") +
+  scale_y_log10(limits=c(0.09, max_mammal))+
+  scale_x_log10(limits=c(0.09, max_mammal))+
+  geom_abline(intercept=0, slope=1, 
+              linetype="dashed", 
+              size=0.3,
+              alpha=0.5,
+              color="grey60")+
+  geom_point(shape=21, alpha=0.5, size=1.75, 
+             aes(fill=bagged_detrans_relative_error))+
+  geom_smooth(method="lm",
+              colour=mammals_colour,
+              linewidth=0.75,
+              se=FALSE)+
+  scale_fill_gradient(high="grey95", 
+                      low=mammals_colour,
+                      trans="log",
+                      breaks=c(0.1, 1, 10, 100))+
+  facet_grid(initial_split_labs~., scales="free")+
+  stat_cor(aes(label=paste(after_stat(r.label),
+                           after_stat(rr.label),
+                           ..p.label..,
+                           sep="~`,`~")),
+           method="spearman",
+           label.x.npc=0.3,
+           label.y.npc=0.05,
+           size=2.25)+ 
+  theme(strip.background=element_blank(), 
+        legend.title=element_text(size=8),
+        legend.text=element_text(angle=90, hjust=1, size=6),
+        legend.key.height=unit(0.3, "cm"), 
+        legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
+  geom_text(x=-1.1, y=1.15, 
+            size=2.5,
+            hjust=0,
+            check_overlap = TRUE,
+            aes(label=paste0("RMSE: ", 
+                             round(detrans_rmse, digits=2))))
+
+
+# mammaltt
+```
+
+```{r fig.width=2.7, fig.height=4.5}
+max_reptile <- max(c(max(bagged_phenoresults_all %>% 
+                           filter(model == "reptilesgallus") %>% 
+                           pull(bagged_detrans_predicted_age_mat))), 
+                   max(bagged_phenoresults_all %>% 
+                         filter(model == "reptilesgallus") %>% 
+                         pull(mean_age_mat)))
+
+reptilett <- ggscatter(data=bagged_phenoresults_all %>%
+                         filter(model == "reptilesgallus"),
+                       x="mean_age_mat",
+                       y="bagged_detrans_predicted_age_mat",
+                       # add="reg.line",
+                       xlab="Known age at maturity (years)",
+                       ylab="Predicted age at maturity (years)",
+                       shape=21,
+                       alpha=0,
+                       size=1.75,
+                       ggtheme=theme_bw(),
+                       fill=NULL,
+                       legend="bottom",
+                       legend.title="Error (%)") +
+  scale_y_log10(limits=c(0.09, max_mammal))+
+  scale_x_log10(limits=c(0.09, max_mammal))+
+  geom_abline(intercept=0, slope=1, 
+              linetype="dashed", 
+              size=0.3,
+              alpha=0.5,
+              color="grey60")+
+  geom_point(shape=21, alpha=0.5, size=1.75, 
+             aes(fill=bagged_detrans_relative_error))+
+  geom_smooth(method="lm",
+              colour=reptiles_colour,
+              linewidth=0.75,
+              se=FALSE)+
+  scale_fill_gradient(high="grey95", 
+                      low=reptiles_colour,
+                      trans="log",
+                      breaks=c(0.1, 1, 10, 100))+
+  facet_grid(initial_split_labs~., scales="free")+
+  stat_cor(aes(label=paste(after_stat(r.label),
+                           after_stat(rr.label),
+                           ..p.label..,
+                           sep="~`,`~")),
+           method="spearman",
+           label.x.npc=0.3,
+           label.y.npc=0.05,
+           size=2.25)+ 
+  theme(strip.background=element_blank(), 
+        legend.title=element_text(size=8),
+        legend.text=element_text(angle=90, hjust=1, size=6),
+        legend.key.height=unit(0.3, "cm"), 
+        legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
+  geom_text(x=-1.1, y=1.15, 
+            size=2.5,
+            hjust=0,
+            check_overlap = TRUE,
+            aes(label=paste0("RMSE: ", 
+                             round(detrans_rmse, digits=2))))
+
+
+# reptilett
+```
+
+```{r}
+## calculate the coordinates for the images
+y_pos_fish_trainval <- 1.5*min(ggplot_build(fishtt)$plot$data$mean_age_mat) 
+x_pos_fish_trainval <- 1*y_pos_fish_trainval 
+y_pos_fish_test <- y_pos_fish_trainval 
+x_pos_fish_test <- x_pos_fish_trainval
+
+y_pos_mammal_trainval <- 1.65*min(ggplot_build(mammaltt)$plot$data$mean_age_mat) 
+x_pos_mammal_trainval <- 0.9*y_pos_mammal_trainval 
+y_pos_mammal_test <- y_pos_mammal_trainval 
+x_pos_mammal_test <- x_pos_mammal_trainval 
+
+y_pos_reptile_trainval <- 1.5*min(ggplot_build(reptilett)$plot$data$mean_age_mat) 
+x_pos_reptile_trainval <- 1*y_pos_reptile_trainval 
+y_pos_reptile_test <- y_pos_reptile_trainval 
+x_pos_reptile_test <- x_pos_reptile_trainval 
+```
+
+```{r fig.width=8, fig.height=5}
+## join group-specific plots ----
+gsttt <- ggarrange(
+  ## fish ----
+  fishtt+geom_image(data=data.frame(x=c(x_pos_fish_trainval, x_pos_fish_test),
+                                    y=c(y_pos_fish_trainval, y_pos_fish_test),
+                                    image=c(danio, danio),
+                                    initial_split_labs=c("Training and validation data", "Test data")) %>%
+                      mutate(initial_split_labs=factor(initial_split_labs, 
+                                                       levels=c("Training and validation data", "Test data"))),
+                    aes(image=image,
+                        y=y,
+                        x=x),
+                    size=danio_size)+
+    ylab(NULL)+
+    theme(strip.text.y=element_blank(),
+          axis.title.x=element_text(colour="white", size=5)),
+  ## mammal ----
+  mammaltt+geom_image(data=data.frame(x=c(x_pos_mammal_trainval, x_pos_mammal_test),
+                                      y=c(y_pos_mammal_trainval, y_pos_mammal_test),
+                                      image=c(homo, homo),
+                                      initial_split_labs=c("Training and validation data", "Test data")) %>%
+                        mutate(initial_split_labs=factor(initial_split_labs, 
+                                                         levels=c("Training and validation data", "Test data"))),
+                      aes(image=image,
+                          y=y,
+                          x=x),
+                      size=0.055)+
+                      # size=homo_size)+
+    ylab(NULL)+
+    theme(strip.text.y=element_blank(), 
+          axis.title.y=element_blank()), 
+  ## reptile ----
+  reptilett+geom_image(data=data.frame(x=c(x_pos_reptile_trainval, x_pos_reptile_test),
+                                       y=c(y_pos_reptile_trainval, y_pos_reptile_test),
+                                       image=c(gallus, gallus),
+                                       initial_split_labs=c("Training and validation data", "Test data")) %>%
+                         mutate(initial_split_labs=factor(initial_split_labs, 
+                                                          levels=c("Training and validation data", "Test data"))),
+                       aes(image=image,
+                           y=y,
+                           x=x),
+                       size=gallus_size)+
+    ylab(NULL)+
+    theme(axis.title.y=element_blank(),
+          # axis.title.x=element_blank()),
+          axis.title.x=element_text(colour="white", size=5)),
+  ## other params ----
+  nrow=1, 
+  widths=c(0.9, 0.9, 1))
+
+# gsttt
+```
+
+```{r fig.width=8.75, fig.height=9}
+annotate_figure(ggarrange(annotate_figure(avttt+
+                                            xlab(NULL)+
+                                            ylab(NULL), 
+                                          right=textGrob("All-vertebrate model\n", rot=270, vjust=1, hjust=0.5, gp=gpar(cex=0.9))), 
+                          annotate_figure(gsttt, 
+                                          right=textGrob("Group-specific models", rot=270, vjust=1, hjust=1, gp=gpar(cex=0.9))), 
+                          nrow=2, 
+                          heights=c(1, 1.1)), 
+                left=textGrob("Predicted age at maturity (years)", rot=90, vjust=0.5, hjust=0.3, gp=gpar(cex=1)))
+
+ggsave("figuresTables/Figure [mc_main_ns].pdf",
+       width=8.25,
+       height=9,
+       units="in")
+
+ggsave("figuresTables/Figure [mc_main_ns].png",
+       width=8.25,
+       height=9,
+       units="in")
+```
+
+```{r}
+## END SCRIPT
+```
+
+

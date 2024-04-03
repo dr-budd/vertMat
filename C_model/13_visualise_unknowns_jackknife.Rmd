@@ -1,0 +1,504 @@
+---
+title: "visualise unknowns"
+author: "Alyssa"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r warning=FALSE, message=FALSE}
+## load libraries
+library(viridis)
+library(ggrepel)
+library(taxize)
+library(ggstance)
+library(ggtree)
+library(ape)
+library(phytools)
+library(ggpubr)
+library(tidyverse)
+```
+
+```{r}
+## IMPORT, FORMAT AND EXPORT DATA ----
+
+## define models ----
+models <- c("fishdaniounknowns", 
+            "mammalshomounknowns", 
+            "reptilesgallusunknowns")
+
+# models <- c("allhomo")
+
+## pheno/results ----
+bagged_unknowns_all_unmod <- NULL
+for (mod in models){
+  
+  ## import data
+  bagged_phenoresults_unknowns <- 
+    read.csv(paste0("dataFiles/13.00_bagged_phenoresults_unknowns_", mod, ".csv"))
+  
+  ## combine
+  bagged_unknowns_all_unmod <- bind_rows(bagged_unknowns_all_unmod, bagged_phenoresults_unknowns)
+  
+  ## name it
+  assign(paste0("bagged_phenoresults_", mod), bagged_phenoresults_unknowns)
+}
+
+## import common names for main
+cmn_nms <- read.csv("../B_exploreData/dataFiles/00.02_genbank_best_vert_genomes_meta.csv") %>%
+  select(organism_name, common_name)
+
+## add labels and names
+bagged_unknowns_all <- bagged_unknowns_all_unmod %>%
+  mutate(model_type = ifelse(model_labs == "All-vertebrate", 
+                             model_labs, 
+                             "Group-specific")) %>%
+  left_join(., cmn_nms) %>%
+  mutate(common_name = case_when(
+    organism_name == "Dermatemys mawii" ~ "Central American river turtle",
+    organism_name == "Thalassophryne amazonica" ~ "Amazon freshwater toadfish",
+    organism_name == "Sebastes koreanus" ~ "Korean rockfish",
+    organism_name == "Olivaichthys viedmensis" ~ "Argentinian velvet catfish",
+    organism_name == "Molossus alvarezi" ~ "Alvarez's mastiff bat",
+    organism_name == "Gogo arcuatus" ~ "Madagascan catfish",
+    organism_name == "Platytropius siamensis" ~ "Siamese schilbeid catfish",
+    organism_name == "Lepidodactylus listeri" ~ "Christmas Island gecko",
+    organism_name == "Cryptoblepharus egeriae" ~ "Christmas Island skink",
+    organism_name == "Hemibagrus guttatus" ~ "Spotted longbarbel catfish",
+    organism_name == "Hydrophis melanocephalus" ~ "Slender-necked sea snake",
+    organism_name == "Ctenochaetus hawaiiensis" ~ "Hawaiian surgeonfish",
+    organism_name == "Syndactyla subalaris" ~ "Lineated foliage-gleaner",
+    organism_name == "Hypsolebias longignatus" ~ "South American killifish",
+    organism_name == "Cacajao hosomi" ~ "Neblina uakari",
+    organism_name == "Leucopsar rothschildi" ~ "Bali myna",
+    organism_name == "Danionella dracula" ~ "Dracula fish",
+    organism_name == "Poropuntius huangchuchieni" ~ "Mekong freshwater cyprinid",
+    # organism_name == "Scientific name" ~ "Common name",
+    TRUE ~ common_name)) %>%
+  mutate(common_name = case_when(common_name == "NULL" ~ "Unknown",
+    TRUE ~ common_name)) %>%
+  mutate(name_lab = paste0(common_name, " (*", organism_name, "*)")) %>%
+    mutate(name_lab2 = paste0(common_name, "\n(*", organism_name, "*)")) %>%
+    ## edit IUCN categories
+    mutate(redlist_cat_unmod = redlist_cat) %>%
+    mutate(redlist_cat = case_when(
+    redlist_cat_unmod == "Extinct in the Wild" ~ "Extinct",
+    redlist_cat_unmod == "Lower Risk/near threatened" ~ "Near Threatened",
+    # redlist_cat_unmod == "old name" ~ "new name",
+    TRUE ~ redlist_cat)) %>%
+  ## order by redlist cat
+  arrange(factor(redlist_cat, levels=c("Not Evaluated", "Data Deficient", 
+                                      "Least Concern", "Near Threatened", 
+                                      "Vulnerable", "Endangered",
+                                      "Critically Endangered", "Extinct"))) %>%
+  mutate(redlist_cat = factor(redlist_cat, levels=c("Not Evaluated", "Data Deficient", 
+                                      "Least Concern", "Near Threatened", 
+                                      "Vulnerable", "Endangered",
+                                      "Critically Endangered", "Extinct")))
+
+soi <- bagged_unknowns_all %>%
+  filter(soi == "y")
+```
+
+```{r}
+print("Number of unknowns predicted in total: ")
+nrow(bagged_unknowns_all)
+```
+
+
+```{r}
+# levels(factor(bagged_unknowns_all$redlist_cat))
+
+print("Number of unknowns predicted for each category: ")
+
+bagged_unknowns_all %>%
+  group_by(redlist_cat) %>% summarise(n=n())
+```
+
+```{r}
+print("removing 'Not Evaluated' and 'Least Concern' species")
+
+bagged_unknowns <- bagged_unknowns_all %>%
+  filter(redlist_cat != "Least Concern") %>%
+  filter(redlist_cat != "Not Evaluated")
+```
+
+```{r}
+# custom_viridis <- viridis_pal(option = "D", direction=-1)(4)[2:4]
+```
+
+```{r}
+## ADD TREES ----
+
+## get timetree data
+chordate_tree <- read.tree("../B_exploreData/timeTree/chordates_species.nwk")
+
+## edit tip labels
+chordate_tree$tip.label <- gsub("_", " ", chordate_tree$tip.label)
+
+## get pheno data
+phenodata <- read.csv(paste0("../B_exploreData/dataFiles/05.00_pheno_allhomo.csv"))
+
+## create a new DD sample based on whats in the tree
+set.seed(1)
+data_deficient_sample <- bagged_unknowns %>%
+  filter(., organism_name %in% chordate_tree$tip.label) %>%
+  filter(., model_type == "Group-specific") %>%
+  filter(., redlist_cat == "Data Deficient") %>%
+  select(bagged_detrans_predicted_age_mat, name_lab,
+         organism_name, common_name, model_group) %>%
+  group_by(model_group) %>%
+  slice_sample(n = 3, replace = FALSE) %>%
+  ungroup()
+
+## create a new EX sample based on whats in the tree
+extinct_sample <- bagged_unknowns %>%
+  filter(., organism_name %in% chordate_tree$tip.label) %>%
+  filter(., model_type == "Group-specific") %>%
+  filter(grepl("Extinct", redlist_cat)) %>%
+  # filter(., redlist_cat == "Data Deficient") %>%
+  select(bagged_detrans_predicted_age_mat, name_lab,
+         organism_name, common_name, model_group) %>%
+  group_by(model_group) %>%
+  # slice_sample(n = 3, replace = FALSE) %>%
+  ungroup()
+
+## create a new SOI sample based on whats in the tree
+soi_sample <- bagged_unknowns %>%
+  filter(., organism_name %in% chordate_tree$tip.label) %>%
+  filter(., model_type == "Group-specific") %>%
+  filter(., soi == "y") %>%
+  select(bagged_detrans_predicted_age_mat, name_lab,
+         organism_name, common_name, model_group) %>%
+  group_by(model_group) %>%
+  # slice_sample(n = 3, replace = FALSE) %>%
+  ungroup()
+```
+
+```{r}
+## CREATE DFS ---- 
+
+## 1. unknowns for group-specific models
+unknown_preds <- bagged_unknowns_all %>%
+  filter(model != "allhomounknowns") %>%
+  select(organism_name, bagged_detrans_predicted_age_mat, common_name) %>%
+  mutate(type = "Predicted") %>%
+  rename(age_mat = bagged_detrans_predicted_age_mat)
+
+## 2. reported values
+reported_age_mat <- read.csv("../B_exploreData/figuresTables/Table S[db_age_mat].csv") %>%
+  select(age_mat, organism_name, common_name) %>%
+  arrange(., organism_name) %>%
+  mutate(type = "Reported")
+
+## join
+plot_data <- full_join(unknown_preds, reported_age_mat) %>%
+  relocate(organism_name, common_name, age_mat) %>%
+  mutate(common_name = case_when(
+    common_name == "Mueller's borneo gibbon" ~ "Bornean gibbon",
+    organism_name == "Sebastes taczanowskii" ~ "White-edged rockfish",
+    organism_name == "Pholidichthys leucotaenia" ~ "Engineer goby",
+    organism_name == "Neolamprologus leleupi" ~ "Lemon cichlid",
+    organism_name == "Lophura swinhoii" ~ "Swinhoe's pheasant",
+    organism_name == "Tarsius wallacei" ~ "Wallace's tarsier",
+    organism_name == "Copsychus sechellarum" ~ "Seychelles magpie-robin",
+    # organism_name == "Scientific name" ~ "Common name",
+    TRUE ~ common_name)) %>%
+  unique(.)
+```
+
+```{r}
+## define colours
+fish_clr <- viridis_pal(option="D", direction=-1)(4)[2]
+maml_clr <- viridis_pal(option="D", direction=-1)(4)[3]
+rptl_clr <- viridis_pal(option="D", direction=-1)(4)[4]
+
+## create a new sample based on whats in the tree
+set.seed(1)
+iucn_sample_unmod <- bagged_unknowns_all %>%
+  filter(., organism_name %in% chordate_tree$tip.label) %>%
+  filter(., model_type == "Group-specific") %>%
+  select(bagged_detrans_predicted_age_mat, name_lab,
+         organism_name, common_name, model_group, redlist_cat) %>%
+  group_by(model_group, redlist_cat) %>%
+  slice_sample(n = 1, replace = FALSE) %>%
+  ungroup() %>%
+  ## fix names
+  mutate(common_name = gsub("american", "American", common_name) %>%
+           gsub("african", "African", .))
+
+# levels(factor(iucn_sample_unmod$redlist_cat))
+
+## order df by redlist category
+iucn_sample <- iucn_sample_unmod %>%
+  arrange(factor(redlist_cat, levels=c("Not Evaluated", "Data Deficient", 
+                                      "Least Concern", "Near Threatened", 
+                                      "Vulnerable", "Endangered",
+                                      "Critically Endangered", "Extinct"))) %>%
+  mutate(redlist_cat = factor(redlist_cat, levels=c("Not Evaluated", "Data Deficient", 
+                                      "Least Concern", "Near Threatened", 
+                                      "Vulnerable", "Endangered",
+                                      "Critically Endangered", "Extinct")))
+```
+
+```{r}
+## import python prediction intervals ----
+
+wd <- "../life_pi/outputs/"
+
+## ~SD
+naive <- full_join(
+  ## fish
+  read.csv(paste0(wd, "fishdanio/pred/mapie_naive_medianpred_alpha0.1.csv")), 
+  ## mammals
+  read.csv(paste0(wd, "mammalshomo/pred/mapie_naive_medianpred_alpha0.1.csv"))) %>%
+  ## birds and reptiles
+  full_join(read.csv(paste0(wd, "reptilesgallus/pred/mapie_naive_medianpred_alpha0.1.csv"))) %>%
+  mutate(method="naive")
+
+## ~boostrapping
+jackknife <- full_join(
+  ## fish
+  read.csv(paste0(wd, "fishdanio/pred/mapie_jackknife_plus_ab_medianpred_alpha0.1.csv")), 
+  ## mammals
+  read.csv(paste0(wd, "mammalshomo/pred/mapie_jackknife_plus_ab_medianpred_alpha0.1.csv"))) %>%
+  ## birds and reptiles
+  full_join(read.csv(paste0(wd, "reptilesgallus/pred/mapie_jackknife_plus_ab_medianpred_alpha0.1.csv"))) %>%
+  mutate(method="jackknife")
+
+## cv
+cv_py <- full_join(
+  ## fish
+  read.csv(paste0(wd, "fishdanio/pred/mapie_cv_medianpred_alpha0.1.csv")), 
+  ## mammals
+  read.csv(paste0(wd, "mammalshomo/pred/mapie_cv_medianpred_alpha0.1.csv"))) %>%
+  ## birds and reptiles
+  full_join(read.csv(paste0(wd, "reptilesgallus/pred/mapie_cv_medianpred_alpha0.1.csv"))) %>%
+  mutate(method="cv_py")
+
+## join and edit
+python_data <- full_join(naive, jackknife) %>%
+  full_join(., cv_py) %>%
+              select(-log_predicted_age_mat, 
+                     -pred,
+                     -detrans_predicted_age_mat) %>%
+  rename(age_mat = bagged_detrans_predicted_age_mat) %>%
+  rename_with(., ~gsub("pred_", "", .x)) %>%
+  mutate(type="Predicted")
+```
+
+```{r}
+## join data sets
+plot_data_all <- plot_data %>%
+  select(-common_name) %>%
+  mutate(method=ifelse(type=="Predicted", "cv_r", NA_character_)) %>%
+  full_join(python_data) %>%
+  left_join(., plot_data %>% 
+              select(organism_name, common_name) %>%
+              unique(.)) %>%
+  arrange(organism_name, common_name)
+```
+
+```{r fig.width=12.375, fig.height=13.375, message=FALSE}
+## CREATE PLOTS (IUCN) ----
+
+mthd <- "jackknife"
+
+## filter data
+plot_data_temp <- filter(plot_data_all,
+                         method==mthd | is.na(method))
+## make plot list
+plot_list_temp <- list()
+
+for (rdlst_ct in levels(factor(iucn_sample$redlist_cat))) {
+  
+  num_rows <- nrow(iucn_sample %>% filter(redlist_cat == rdlst_ct))
+  
+  for (spp_num in 1:num_rows) {
+    
+    ## species of interest
+    species_of_interest <- (iucn_sample %>%
+                              filter(redlist_cat == rdlst_ct) %>%
+                              pull(organism_name))[spp_num]
+    
+    ## model group
+    mdl_grp <- (iucn_sample %>%
+                  filter(organism_name == species_of_interest) %>%
+                  pull(model_group))
+    
+    ## define colour
+    clr <- ifelse(mdl_grp == "Fish", 
+                  fish_clr, 
+                  ifelse(mdl_grp == "Mammals", 
+                         maml_clr, 
+                         ifelse(mdl_grp == "Reptiles", 
+                                rptl_clr)))
+    
+    ## subset tree for genome and lifespan species + unknown species of interest
+    keep_tips <- intersect(chordate_tree$tip.label, phenodata$organism_name)
+    keep_tips <- c(keep_tips, species_of_interest)
+    my_tree <- keep.tip(chordate_tree, keep_tips)
+    
+    ## calculate pairwise distances
+    dist_matrix <- cophenetic(my_tree)
+    
+    ## get the distances for the species of interest
+    species_distances <- dist_matrix[species_of_interest,]
+    
+    ## sort and get the four closest species
+    ## (start from 2 because the first one is the distance to itself, which is 0)
+    closest_species <- sort(species_distances)[2:5] 
+    
+    ## extract the names of these species
+    closest_species_names <- names(closest_species)
+    
+    ## get a tree with just those species
+    temp_tree <- keep.tip(my_tree, c(closest_species_names, species_of_interest))
+    
+    ## add data
+    temp_data <- data.frame(organism_name=temp_tree$tip.label) %>%
+      left_join(., plot_data_temp) %>% 
+      relocate(common_name) %>%
+      mutate(dummy_redlist_cat = rdlst_ct)
+    
+    ## edit tip labels again (use common names)
+    temp_tree <- treeio::rename_taxa(temp_tree, temp_data, organism_name, common_name)
+    
+    ## plot it (with divergence time)
+    temp_ggtree <- ggtree(temp_tree)+
+      theme_tree2()+
+      geom_tiplab(as_ylab = TRUE)
+    
+    temp_ggtree <- revts(temp_ggtree)+
+      scale_x_continuous(labels=function(x) scales::comma(abs(x)))
+    
+    ## make facet plot including age at maturity pointrange plot panel
+    temp_ffplot<-facet_plot(temp_ggtree, 
+                            panel = "Age at maturity",
+                            data=temp_data %>%
+                              mutate(upper=ifelse(is.na(upper), age_mat, upper),
+                                     lower=ifelse(is.na(lower), age_mat, lower)),
+                            geom=geom_pointrangeh,
+                            aes(x=age_mat,
+                                xmin=upper,
+                                xmax=lower,
+                                shape=type,
+                                size=type),
+                            colour=clr,
+                            fill=clr)+
+      scale_shape_manual(values = c(19, 4))+
+      scale_size_manual(values = c(0.7, 0.4))+
+      xlim_expand(xlim = c(0, max(temp_data$age_mat)),
+                  panel = "Age at maturity") +
+      theme(legend.title=element_blank(),
+            legend.position = "top",
+            strip.background = element_blank(),
+            strip.text.x = element_blank(),
+            panel.border = element_rect(colour = NA, fill = NA))+
+      guides(shape = guide_legend(override.aes = list(linetype = c(1, 0),
+                                                      colour = c("black", "black"))))+
+      labs(y=temp_data$dummy_redlist_cat)
+    
+    ## add it to list
+    plot_list_temp[[length(plot_list_temp) + 1]] <- temp_ffplot
+    
+  }
+}
+
+## remove y axis title
+modified_plot_list_temp <- list()
+for (i in 1:length(plot_list_temp)) {
+  if (i %in% c(1, 2, 4, 5, 7, 8, 10, 11, 13, 14, 16, 17, 19, 20, 22, 23)) {
+    ## modify the y-axis label for the selected plots
+    plot_list_temp[[i]] <- plot_list_temp[[i]] +
+      theme(axis.title.y = element_blank())
+  }
+  modified_plot_list_temp[[i]] <- plot_list_temp[[i]]
+}
+
+## add title (1, 2, 3)
+modified_plot_list_temp[[1]] <- modified_plot_list_temp[[1]]+
+  ggtitle("Fish")+theme(plot.title = element_text(hjust = 0.5))
+modified_plot_list_temp[[2]] <- modified_plot_list_temp[[2]]+
+  ggtitle("Mammals")+theme(plot.title = element_text(hjust = 0.5))
+modified_plot_list_temp[[3]] <- modified_plot_list_temp[[3]]+
+  ggtitle("Reptiles")+theme(plot.title = element_text(hjust = 0.5))
+
+## check
+p1_temp <- ggarrange(plotlist = modified_plot_list_temp, 
+                     ncol=3, nrow=length(modified_plot_list_temp)/3,
+                     common.legend = TRUE)
+
+## label x-axis
+ann1 <- ggplot() +
+  geom_text(aes(x=0, y=0, label = "Time (MYA)"), size = 3) +
+  theme_void()+theme(plot.margin = margin(0,0,0,0))
+
+ann2 <- ggplot() +
+  geom_text(aes(x=0, y=0, label = "Age at maturity (years)"), size = 3) +
+  theme_void()+theme(plot.margin = margin(0,0,0,0))
+
+ann3 <- ggplot() +
+  geom_text(aes(x=0, y=0, label = " "), size = 3) +
+  theme_void()+theme(plot.margin = margin(0,0,0,0))
+
+p2_temp <- ggarrange(ann1, ann2, ann3, 
+                     ann1, ann2, ann3,
+                     ann1, ann2, ann3,
+                     nrow=1)
+
+plot_temp <- ggarrange(p1_temp, 
+                       p2_temp,
+                       heights = c(0.9, 0.025), nrow=2)
+
+## print it
+print(mthd)
+print(plot_temp)
+
+## save it
+ggsave(paste0("figuresTables/Figure [unknowns_", mthd, "].pdf"),
+       plot_temp,
+       width=8.25*1.5, 
+       height=10.25*1.5)
+
+ggsave(paste0("figuresTables/Figure [unknowns_", mthd, "].png"),
+       plot_temp,
+       width=8.25*1.5, 
+       height=10.25*1.5)
+```
+
+```{r}
+## create supp table
+supp_unknowns_preds <- plot_data_all %>%
+  filter(method == mthd) %>%
+  full_join(., bagged_unknowns_all) %>%
+  select(-method, -type, -model) %>%
+  mutate(predicted_age_mat_yrs = round(age_mat, digits=4), 
+         predicted_lower_bound_yrs = round(lower, digits=4), 
+         predicted_upper_bound_yrs = round(upper, digits=4)) %>%
+  rename(scientific_name = organism_name,
+         model = model_labs) %>%
+  select(scientific_name, common_name,
+         predicted_age_mat_yrs, predicted_lower_bound_yrs, predicted_upper_bound_yrs,
+         assembly_accession, model,
+         redlist_cat, class, order, family, genus) %>%
+  arrange(#desc(redlist_cat), 
+          scientific_name)
+
+write.csv(supp_unknowns_preds, "figuresTables/Table S[unknowns_preds].csv", row.names=FALSE)
+```
+
+```{r}
+## END SCRIPT
+```
+
+

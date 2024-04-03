@@ -1,0 +1,704 @@
+---
+title: "error figure"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+
+response <- "mean_age_mat"
+```
+
+```{r load_libraries, include=FALSE}
+## load libraries
+library(viridis) 
+library(cocor)
+library(ggpubr) 
+library(scales)
+library(colorspace)
+library(ggimage)
+library(ggforce)
+library(ggtext)
+library(tidyverse) 
+```
+
+```{r}
+## IMPORT AND FORMAT DATA ----
+
+## import pheno data
+all_bms <- read.csv("dataFiles/09.00_bagged_phenoresults_allhomo.csv")
+fish_bms <- read.csv("dataFiles/09.00_bagged_phenoresults_fishdanio.csv")
+mammals_bms <- read.csv("dataFiles/09.00_bagged_phenoresults_mammalshomo.csv")
+reptiles_bms <- read.csv("dataFiles/09.00_bagged_phenoresults_reptilesgallus.csv")
+
+all_err <- all_bms %>%
+  select(organism_name, model_group, !!sym(response), bagged_detrans_predicted_age_mat, log_age_mat,
+         bagged_detrans_absolute_error, bagged_detrans_relative_error, bagged_log_predicted_age_mat,
+         b_complete, initial_split, dist_from_homo_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>% 
+  mutate(model_refseqs = "homo", 
+         model_type = "All-vertebrate",
+         model = "All") %>%
+  rename(dist_from_refseq_lca = dist_from_homo_lca)
+
+all_err_again <- all_bms %>%
+  select(organism_name, model_group, !!sym(response), bagged_detrans_predicted_age_mat, log_age_mat,
+         bagged_detrans_absolute_error, bagged_detrans_relative_error, bagged_log_predicted_age_mat,
+         b_complete, initial_split, dist_from_homo_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>% 
+  mutate(model_refseqs = "homo", 
+         model_type = "All-vertebrate",
+         model = "All") %>%
+  mutate(model_group = "All") %>%
+  rename(dist_from_refseq_lca = dist_from_homo_lca)
+
+fish_err <- fish_bms %>%
+  select(organism_name, model_group, !!sym(response), bagged_detrans_predicted_age_mat, log_age_mat,
+         bagged_detrans_absolute_error, bagged_detrans_relative_error, bagged_log_predicted_age_mat,
+         b_complete, initial_split, dist_from_danio_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>% 
+  mutate(model_refseqs = "danio",
+         model_type = "Group-specific",
+         model = "Fish") %>%
+  rename(dist_from_refseq_lca = dist_from_danio_lca)
+
+mammals_err <- mammals_bms %>%
+  select(organism_name, model_group, !!sym(response), bagged_detrans_predicted_age_mat, log_age_mat,
+         bagged_detrans_absolute_error, bagged_detrans_relative_error, bagged_log_predicted_age_mat,
+         b_complete, initial_split, dist_from_homo_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>% 
+  mutate(model_refseqs = "homo", 
+         model_type = "Group-specific",
+         model = "Mammals") %>%
+  rename(dist_from_refseq_lca = dist_from_homo_lca)
+
+reptiles_err <- reptiles_bms %>%
+  select(organism_name, model_group, !!sym(response), bagged_detrans_predicted_age_mat, log_age_mat,
+         bagged_detrans_absolute_error, bagged_detrans_relative_error, bagged_log_predicted_age_mat,
+         b_complete, initial_split, dist_from_gall_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>% 
+  mutate(model_refseqs = "gallus", 
+         model_type = "Group-specific",
+         model = "Reptiles") %>%
+  rename(dist_from_refseq_lca = dist_from_gall_lca)
+
+## join them
+error <- rbind.data.frame(all_err, all_err_again, 
+                          fish_err, mammals_err, reptiles_err) %>%
+  mutate(category = paste(model_group, 
+                          model_refseqs, 
+                          model, 
+                          sep="_")) %>%
+  ## fix factor levels
+  mutate(category = factor(category, levels=c("All_homo_All",
+                                              "Amphibians_homo_All",
+                                              "Fish_homo_All", 
+                                              "Fish_danio_Fish", 
+                                              "Mammals_homo_All", 
+                                              "Mammals_homo_Mammals", 
+                                              "Reptiles_homo_All", 
+                                              "Reptiles_gallus_Reptiles"))) %>%
+  group_by(category, initial_split) %>%
+  mutate(mnae=mean(bagged_detrans_absolute_error), 
+         mnre=mean(bagged_detrans_relative_error), 
+         mdnae=median(bagged_detrans_absolute_error), 
+         mdnre=median(bagged_detrans_relative_error)) %>%
+  mutate(label_median=paste0(round(mdnae, digits=2), " years\n",
+                     round(mdnre, digits=2), "%")) %>%
+  mutate(label_mean=paste0(round(mnae, digits=2), " years\n",
+                     round(mnre, digits=2), "%"))
+
+error_less <- error %>%
+  select(model_group, initial_split, model_refseqs, model_type, model, category, label_median, label_mean) %>%
+  unique(.)
+
+error_trainval <- error %>% filter(initial_split == "trainValidate")
+error_test <- error %>% filter(initial_split == "test")
+```
+
+```{r}
+## PREP FOR PLOTS ----
+
+## read in pics
+gallus <- 
+  ("../B_exploreData/phyloPics/Gallus-gallus-domesticus_Steven-Traver_CC0-1.0_aff847b0-ecbd-4d41-98ce-665921a6d96e_360x512_grey2.png")
+homo <- 
+  ("../B_exploreData/phyloPics/Homo-sapiens-sapiens_CC0-1.0_41b127f6-0824-4594-a941-5ff571f32378_219x512_grey2.png")
+danio <- 
+  ("../B_exploreData/phyloPics/Danio-rerio_Jake-Warner_CC0-1.0_e86bc377-3a6c-4efa-8703-1a12cb019ef7_512x176_grey2.png")
+musc <- ("../B_exploreData/phyloPics/Mus-homoulus_Jiro-Wada_CC0-1.0_c8f71c27-71db-4b34-ac2d-e97fea8762cf_210x143_grey2.png")
+
+## scaling for pics
+gallus_size <- 0.11/2.2
+homo_size <- 0.06/2
+musc_size <- 0.13/2
+danio_size <- 0.15/2
+
+## facet annotation df
+facet_anno <- data.frame(x = c(1:5, 1:3),
+                         y = rep(0.0001, 8),
+                         size = c(homo_size, homo_size, homo_size, homo_size, homo_size, 
+                                  danio_size, homo_size, gallus_size),
+                         image = c(homo, homo, homo, homo, homo,
+                                   danio, homo, gallus),
+                         ref_species = c("*Homo sapiens*", "*Homo sapiens*", "*Homo sapiens*", "*Homo sapiens*", "*Homo sapiens*",
+                                   "*Danio rerio*", "*Homo sapiens*", "*Gallus gallus*"),
+                         model_type = c("All-vertebrate", "All-vertebrate", "All-vertebrate", 
+                                        "All-vertebrate", "All-vertebrate",
+                                        "Group-specific", "Group-specific", "Group-specific"),
+                         category = c("Fish_homo_All", "Mammals_homo_All", "Reptiles_homo_All",
+                                      "Amphibians_homo_All", "All_homo_All", 
+                                      "Fish_danio_Fish", "Mammals_homo_Mammals", "Reptiles_gallus_Reptiles"))
+
+## x-axis labels
+brks = c("All_homo_All", "Amphibians_homo_All", "Fish_homo_All", "Mammals_homo_All", "Reptiles_homo_All", 
+         "Fish_danio_Fish", "Mammals_homo_Mammals", "Reptiles_gallus_Reptiles")
+xlabs <- c("All species", "Amphibians", "Fish","Mammals", "Reptiles",
+           "Fish","Mammals","Reptiles")
+
+## facet labels
+facet_labs <- c("All-vertebrate model", "Group-specific models", "Training and Validation", "Testing")
+names(facet_labs) <- c("All-vertebrate", "Group-specific", "trainValidate", "test")
+
+## edit colours that correspond to "category"
+cols <- c("grey70", 
+          # lighten(viridis_pal(option="D", direction=-1)(4)[1], 0.5), 
+          viridis_pal(option="D", direction=-1)(4)[1], 
+          viridis_pal(option="D", direction=-1)(4)[2],
+          viridis_pal(option="D", direction=-1)(4)[2],
+          viridis_pal(option="D", direction=-1)(4)[3], 
+          viridis_pal(option="D", direction=-1)(4)[3], 
+          viridis_pal(option="D", direction=-1)(4)[4],
+          viridis_pal(option="D", direction=-1)(4)[4])
+
+legend_labels <- c("*Danio rerio*",
+                   "*Gallus gallus*",
+                   "*Homo sapiens*")
+
+## name the colours so they don't disappear when you edit the legend
+names(cols) <- levels(factor(error$category))
+
+## make ggimage legend points (instead of R graphics)
+options(ggimage.keytype = "point")
+```
+
+
+```{r fig.width = 8, fig.height=3}
+## both together
+
+## facet labels
+facet_labs <- c("All-vertebrate model", "Group-specific models")
+names(facet_labs) <- c("All-vertebrate", "Group-specific")
+
+## plot median for both
+plot_med <- ggplot(data=error %>%
+                     mutate(label_median = gsub(" years", "y", label_median), 
+                            initial_split_fac = gsub("trainValidate", 
+                                                     "Training/validation", initial_split) %>%
+                              gsub("test", "Test", .)) %>%
+                     mutate(initial_split_fac = factor(initial_split_fac, 
+                                                       levels=c("Training/validation",
+                                                                "Test"))),
+                   aes(x = category, 
+                       fill = category,
+                       y = bagged_detrans_absolute_error)) + 
+  scale_x_discrete(breaks=brks, labels=xlabs)+
+  scale_y_log10(expand=c(0.1, 0),
+                labels = ~ format(.x, scientific = FALSE))+
+  geom_violin(aes(alpha = initial_split_fac), trim = TRUE, 
+              scale="width", position = position_dodge(width = 0.9)) +
+  geom_sina(aes(alpha = initial_split_fac), size=0.2, 
+            scale="width", position = position_dodge(width = 0.9), show.legend = FALSE) +
+  geom_boxplot(aes(alpha = initial_split_fac), 
+               width = 0.07,
+               position = position_dodge(width = 0.9),
+               outlier.size = -1, show_guide = FALSE) +
+  theme_classic()+
+  ## label w abs and rel error
+  geom_text(aes(x=category,
+                alpha=initial_split_fac,
+                y=max(.data$bagged_detrans_absolute_error)*2,
+                label=label_median),
+            position=position_dodge(width=1),
+            check_overlap = TRUE,
+            colour="black",
+            size=1.7)+
+  facet_wrap(~model_type,
+             nrow=1,
+             labeller=as_labeller(facet_labs),
+             scales="free")+
+  ## add x-axis back
+  geom_vline(aes(xintercept=-Inf)) + 
+  coord_cartesian(clip="off")+
+  geom_image(data = facet_anno,
+             aes(image = image,
+                 colour=ref_species,
+                 y = y,
+                 size=size,
+                 x = x))+
+  scale_size_identity()+
+  labs(alpha="Data", 
+       y="Prediction error (years)")+
+  theme(legend.text = element_markdown(), ## italics
+        axis.text.x = element_text(size=7), 
+        strip.background = element_blank(),
+        strip.placement = "outside",
+        axis.title.x = element_blank())+
+  scale_color_manual(name = "Reference species", 
+                     labels=legend_labels, 
+                     values = c("grey50", "grey51", "grey52"))+
+  scale_fill_manual(values = cols, 
+                      breaks = c("All_homo_All", 
+                                 "Amphibians_homo_All", 
+                                 "Fish_danio_Fish", 
+                                 "Mammals_homo_Mammals", 
+                                 "Reptiles_gallus_Reptiles"), 
+                      labels=c("All", 
+                               "Amphibians", 
+                               "Fish", 
+                               "Mammals", 
+                               "Reptiles"), 
+                    name="Group", 
+                    guide="none")+
+  scale_alpha_manual(values=c(0.9, 0.5))+
+  guides(alpha = guide_legend(override.aes = list(size = 3, fill=c("grey20", "grey90"))))
+
+# plot_med
+```
+
+```{r}
+## TTEST FUNCTION ----
+
+## t-test and variance test function (transform skewed data)
+tTestTrans <- function(df1, df2, values) {
+
+  ## perform f-test to determine
+  var <- var.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  alternative = "two.sided")
+
+  ## perform t-test based on variances
+  if (var$p.value >= 0.05) {
+    # print("variance equal")
+    res <- t.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  var.equal = TRUE, ## equal (null)
+                  paired = FALSE)
+  } else {
+    # print("variance unequal")
+    res <- t.test(log(df1 %>% pull({{values}})),
+                  log(df2 %>% pull({{values}})),
+                  var.equal = FALSE, ## unequal (alt)
+                  paired = FALSE)
+  }
+
+  res$p.value
+}
+
+```
+
+
+```{r}
+## TTEST TRAINING DATA ----
+
+## loop over the levels of 'category'
+for (cat in levels(error_trainval$category)) {
+  temp_data <- filter(error_trainval, category == cat) %>%
+    ungroup(.) %>%
+    select(organism_name, bagged_detrans_absolute_error,
+           bagged_detrans_relative_error,
+           bagged_log_predicted_age_mat, log_age_mat) %>%
+  arrange(organism_name)
+  assign(paste0("df_", cat), temp_data)
+}
+
+fish_ae <- tTestTrans(df1=df_Fish_danio_Fish, 
+                   df2=df_Fish_homo_All, 
+                   values=bagged_detrans_absolute_error)
+
+mammal_ae <- tTestTrans(df1=df_Mammals_homo_Mammals, 
+                     df2=df_Mammals_homo_All, 
+                     values=bagged_detrans_absolute_error)
+
+reptile_ae <- tTestTrans(df1=df_Reptiles_gallus_Reptiles, 
+                      df2=df_Reptiles_homo_All, 
+                      values=bagged_detrans_absolute_error)
+
+## table median
+signif_trainval <- error_trainval %>% 
+  ungroup(.) %>%
+  select(model_group, model_type, mdnae) %>% 
+  unique(.) %>%
+  pivot_longer(cols = c(mdnae), names_to = "Measure", values_to = "value") %>%
+  mutate(value = round(value, digits=2)) %>%
+  pivot_wider(names_from = model_type, values_from = value) %>%
+  mutate(Measure = gsub("mdnae", "MedAE (years)", Measure)) %>%
+  mutate(Improvement = ifelse(`All-vertebrate` > `Group-specific`, 
+                              "Yes", 
+                              "No")) %>%
+  mutate(`P-value` = ifelse(model_group == "Mammals" & Measure == "MedAE (years)", 
+                             mammal_ae,
+                                    ifelse(model_group == "Fish" & Measure == "MedAE (years)", 
+                                           fish_ae,
+                                                  ifelse(model_group == "Reptiles" & Measure == "MedAE (years)", 
+                                                         reptile_ae,
+                                                         NA)))) %>%
+  rename(Group = model_group)
+
+# signif_trainval
+```
+
+```{r}
+## TTEST TESTING DATA ----
+
+## loop over the levels of 'category'
+for (cat in levels(error_test$category)) {
+  temp_data <- filter(error_test, category == cat) %>%
+    ungroup(.) %>%
+    select(organism_name, bagged_detrans_absolute_error,
+           bagged_detrans_relative_error,
+           bagged_log_predicted_age_mat, log_age_mat) %>%
+  arrange(organism_name)
+  assign(paste0("df_test_", cat), temp_data)
+}
+
+fish_ae_test <- tTestTrans(df1=df_test_Fish_danio_Fish, 
+                   df2=df_test_Fish_homo_All, 
+                   values=bagged_detrans_absolute_error)
+
+mammal_ae_test <- tTestTrans(df1=df_test_Mammals_homo_Mammals, 
+                     df2=df_test_Mammals_homo_All, 
+                     values=bagged_detrans_absolute_error)
+
+reptile_ae_test <- tTestTrans(df1=df_test_Reptiles_gallus_Reptiles, 
+                      df2=df_test_Reptiles_homo_All, 
+                      values=bagged_detrans_absolute_error)
+
+## table median
+signif_test <- error_test %>% 
+  ungroup(.) %>%
+  select(model_group, model_type, mdnae, mdnre) %>% 
+  unique(.) %>%
+  pivot_longer(cols = c(mdnae, mdnre), names_to = "Measure", values_to = "value") %>%
+  mutate(value = round(value, digits=2)) %>%
+  pivot_wider(names_from = model_type, values_from = value) %>%
+  mutate(Measure = gsub("mdnae", "MedAE (years)", Measure) %>%
+           gsub("mdnre", "MedRE (%)", .)) %>%
+  mutate(Improvement = ifelse(`All-vertebrate` > `Group-specific`, 
+                              "Yes", 
+                              "No")) %>%
+  mutate(`P-value` = ifelse(model_group == "Mammals" & Measure == "MedAE (years)", 
+                             mammal_ae_test,
+                                    ifelse(model_group == "Fish" & Measure == "MedAE (years)", 
+                                           fish_ae_test,
+                                                  ifelse(model_group == "Reptiles" & Measure == "MedAE (years)", 
+                                                         reptile_ae_test,
+                                                         NA)))) %>%
+  rename(Group = model_group)
+
+# signif_test
+```
+
+```{r}
+## table of summary statistics for error_trainval
+sum_stats_error_trainval <- error_trainval %>% 
+  group_by(model_group, model_type) %>%
+  summarise(#`No. observations` = n(),
+            `MedAE [min, max] (years)`= paste0(round(median(bagged_detrans_absolute_error), digits=2), 
+                                        " [", round(min(bagged_detrans_absolute_error), digits=2), ", ",
+                                        round(max(bagged_detrans_absolute_error), digits=2), "]"))%>%
+  pivot_longer(cols = c(`MedAE [min, max] (years)`), names_to = "Measure", values_to = "value") %>%
+  pivot_wider(names_from = model_type, values_from = value) %>%
+  rename(Group = model_group) %>%
+  left_join(., signif_trainval %>% 
+              select(-`All-vertebrate`, -`Group-specific`) %>%
+              mutate(Measure = gsub("MedAE.*", "MedAE [min, max] (years)", Measure))) %>%
+  mutate(`Data split` = "Training/Validation")
+
+## and test
+sum_stats_error_test <- error_test %>% 
+  group_by(model_group, model_type) %>%
+  summarise(`MedAE [min, max] (years)`= paste0(round(median(bagged_detrans_absolute_error), digits=2), 
+                                        " [", round(min(bagged_detrans_absolute_error), digits=2), ", ",
+                                        round(max(bagged_detrans_absolute_error), digits=2), "]")) %>%
+  pivot_longer(cols = c(`MedAE [min, max] (years)`), names_to = "Measure", values_to = "value") %>%
+  pivot_wider(names_from = model_type, values_from = value) %>%
+  rename(Group = model_group) %>%
+  left_join(., signif_test %>% 
+              select(-`All-vertebrate`, -`Group-specific`) %>%
+              mutate(Measure = gsub("MedAE.*", "MedAE [min, max] (years)", Measure))) %>%
+  mutate(`Data split` = "Testing") 
+
+sum_stats_error <- bind_rows(sum_stats_error_trainval, sum_stats_error_test) %>%
+  relocate(`Data split`) %>%
+  mutate(Significance = ifelse(`P-value` > 0.05, "NSD", 
+                               ifelse(`P-value` < 0.001, "<0.001***", 
+                                 ifelse(`P-value` < 0.01, "<0.01**",
+                                        "<0.05*")))) %>%
+  select(-Measure)
+
+write.csv(sum_stats_error, "figuresTables/Table S[sum_stats_error].csv", row.names = FALSE)
+
+sum_stats_error
+```
+
+```{r}
+## compare trainval vs test ...
+
+allha_ae_ttest <- tTestTrans(df1=df_test_All_homo_All, 
+                   df2=df_All_homo_All, 
+                   values=bagged_detrans_absolute_error)
+
+aha_ae_ttest <- tTestTrans(df1=df_test_Amphibians_homo_All, 
+                   df2=df_Amphibians_homo_All, 
+                   values=bagged_detrans_absolute_error)
+
+fdf_ae_ttest <- tTestTrans(df1=df_test_Fish_danio_Fish, 
+                   df2=df_Fish_danio_Fish, 
+                   values=bagged_detrans_absolute_error)
+
+fha_ae_ttest <- tTestTrans(df1=df_test_Fish_homo_All, 
+                   df2=df_Fish_homo_All, 
+                   values=bagged_detrans_absolute_error)
+
+mhm_ae_ttest <- tTestTrans(df1=df_test_Mammals_homo_Mammals, 
+                     df2=df_Mammals_homo_Mammals, 
+                     values=bagged_detrans_absolute_error)
+
+mha_ae_ttest <- tTestTrans(df1=df_test_Mammals_homo_All, 
+                     df2=df_Mammals_homo_All, 
+                     values=bagged_detrans_absolute_error)
+
+
+rgr_ae_ttest <- tTestTrans(df1=df_test_Reptiles_gallus_Reptiles, 
+                      df2=df_Reptiles_gallus_Reptiles, 
+                      values=bagged_detrans_absolute_error)
+
+rha_ae_ttest <- tTestTrans(df1=df_test_Reptiles_homo_All, 
+                      df2=df_Reptiles_homo_All, 
+                      values=bagged_detrans_absolute_error)
+```
+
+
+```{r}
+## and test
+sum_stats_train_test <- error %>% 
+  group_by(model_type, model_group, initial_split) %>%
+  summarise(`MedAE [min, max] (years)`= paste0(round(median(bagged_detrans_absolute_error), digits=2), 
+                                               " [", round(min(bagged_detrans_absolute_error), digits=2), ", ",
+                                               round(max(bagged_detrans_absolute_error), digits=2), "]")) %>%
+  pivot_longer(cols = c(`MedAE [min, max] (years)`), names_to = "Measure", values_to = "value") %>%
+  pivot_wider(names_from = initial_split, values_from = value) %>%
+  mutate(`P-value` = ifelse(model_group == "Mammals" & model_type == "All-vertebrate", 
+                               mha_ae_ttest,
+                               ifelse(model_group == "Mammals" & model_type == "Group-specific", 
+                                      mhm_ae_ttest,
+                                      ifelse(model_group == "Fish" & model_type == "All-vertebrate", 
+                                             fha_ae_ttest,
+                                             ifelse(model_group == "Fish" & model_type == "Group-specific", 
+                                                    fdf_ae_ttest,
+                                                    ifelse(model_group == "Reptiles" & model_type == "All-vertebrate", 
+                                                           rha_ae_ttest,
+                                                           ifelse(model_group == "Reptiles" & model_type == "Group-specific", 
+                                                                  rgr_ae_ttest,
+                                                                  ifelse(model_group == "Amphibians" & model_type == "All-vertebrate", 
+                                                                         aha_ae_ttest,
+                                                                         ifelse(model_group == "All" & model_type == "All-vertebrate", 
+                                                                         allha_ae_ttest,
+                                                                         NA))))))))) %>%
+  rename(Group = model_group, 
+         `Model type` = model_type,
+         `Testing data` = test, 
+         `Training and validation data` = trainValidate) %>%
+  mutate(Significance = ifelse(`P-value` > 0.05, "NSD", 
+                               ifelse(`P-value` < 0.001, "<0.001***", 
+                                 ifelse(`P-value` < 0.01, "<0.01**",
+                                        "<0.05*")))) %>%
+  select(-Measure)
+
+
+sum_stats_train_test
+
+write.csv(sum_stats_train_test, "figuresTables/Table S[sum_stats_train_test].csv", row.names = FALSE)
+```
+
+#### table of all predictions 
+
+```{r}
+## create prediction file for supplementary
+predictions <- full_join(all_bms %>%
+                           mutate(Model = "All-vertebrate"), 
+                         fish_bms %>%
+                           mutate(Model = "Fish")) %>%
+  full_join(., reptiles_bms %>%
+              mutate(Model = "Reptiles")) %>%
+  full_join(., mammals_bms %>%
+              mutate(Model = "Mammals")) %>%
+  select(organism_name,
+         initial_split, 
+         !!sym(response), 
+         bagged_detrans_predicted_age_mat, 
+         bagged_detrans_absolute_error, 
+         bagged_detrans_relative_error, 
+         model_group, Model) %>%
+  unique(.) %>%
+  group_by(Model) %>%
+  mutate(!!response := round(.data[[response]], digits=2),
+         bagged_detrans_predicted_age_mat = round(bagged_detrans_predicted_age_mat, digits=2),
+         bagged_detrans_absolute_error = round(bagged_detrans_absolute_error, digits=2),
+         bagged_detrans_relative_error = round(bagged_detrans_relative_error, digits=2)) %>%
+  rename(Species = organism_name,
+         `Data split` = initial_split, 
+         `Known age at maturity (years)` = !!sym(response),
+         `Predicted age at maturity (years)` = bagged_detrans_predicted_age_mat,
+         `Predicted age at maturity absolute error (years)` = bagged_detrans_absolute_error,
+         `Predicted age at maturity relative error (%)` = bagged_detrans_relative_error, 
+         `Group` = model_group) %>%
+  relocate(Model, Group, Species) %>%
+  arrange(Model, Group, Species) %>%
+  mutate(Model = gsub("Fish", "Fish-specific", Model) %>%
+           gsub("Mammal", "Mammal-specific", .) %>%
+           gsub("Reptile", "Reptile-specific", .) %>%
+           gsub("specifics", "specific", .))
+  
+## export it
+write.csv(predictions,
+          paste0("figuresTables/Table S[predictions].csv"),
+          row.names=FALSE)
+```
+
+## scatter plots
+
+Scatter plots to demonstrate the point that group specific refseqs probably help (because more hits = less error)
+
+NB: these plots show values calculated using predictive promoters only
+
+```{r fig.width=8, fig.height=3}
+## create viridis colour scale
+custom_viridis <- viridis_pal(option = "D", direction=-1)(4)
+
+## change the first colour
+custom_viridis <- c("grey70", custom_viridis)
+
+## edit df
+error_hits <- error %>%
+  ungroup(.) %>%
+  select(bagged_detrans_absolute_error, category, model,
+         dist_from_refseq_lca,
+         num_hits_pp, mean_hit_len_pp_z, mean_hit_pi_pp_z) %>%
+  pivot_longer(cols=-c(bagged_detrans_absolute_error, category, model)) %>%
+  mutate(name_lab = gsub("num_hits_pp", "Number of hits", name) %>%
+           gsub("mean_hit_len_pp_z", "Mean hit length (bp)", .) %>%
+           gsub("mean_hit_pi_pp_z", "Mean hit identity (%)", .) %>%
+           gsub("dist_from_refseq_lca", "Divergence from\nreference species", .))
+
+
+## add a row for amphibians
+error_hits <- bind_rows(error_hits, 
+                        (error_hits[1,] %>%
+                           mutate(model="Amphibians"))) %>%
+  mutate(model = factor(model))
+
+plot <- ggplot(error_hits %>%
+                 filter(model != "Amphibians"), 
+               aes(x = value, 
+                   y = bagged_detrans_absolute_error)) +
+  facet_wrap(~name_lab,
+             scales="free",
+             nrow=1,
+             strip.position="bottom")+
+  theme_classic()+
+  geom_point(aes(fill=model), 
+             stroke=0.25,
+             alpha=0.5,
+             shape=21, 
+             size=0.9)+
+    labs(y="Prediction error (years)")+
+    scale_color_manual(values=custom_viridis, guide="none", drop=FALSE)+
+    scale_fill_manual(values=custom_viridis, name="", drop=FALSE)+
+    scale_y_log10(labels = ~ format(.x, scientific = FALSE))+
+    scale_x_log10(labels = ~ format(.x, scientific = FALSE))+
+    geom_smooth(aes(color=model),
+                method=lm,
+                se=FALSE)+
+    stat_cor(aes(label = paste(after_stat(r.label),
+                               after_stat(rr.label),
+                               after_stat(p.label),
+                               sep = "~`,`~"),
+                 color=model),
+             label.x.npc = 0.001,
+             label.y.npc = 0.25,
+             size=2)+
+  theme(strip.placement = "outside", 
+        strip.background = element_blank(),
+        legend.position="bottom",
+        axis.title.x = element_blank())+
+  guides(fill = guide_legend(override.aes = list(size = 3, alpha=1)))
+
+# plot
+```
+
+```{r}
+# ggsave("figuresTables/Figure [error].svg", plot_med, width=8.25, height=11.75/3.5, units="in")
+```
+
+```{r fig.width=8, fig.height=6}
+p<-ggarrange(plot_med,
+          plot+theme(axis.title.y = element_text(size=10)),
+          nrow=2, labels=c("A", "B"))
+
+p
+
+ggsave("figuresTables/Figure [error_both].png", p, width=8.25, height=11.75/1.9, units="in")
+ggsave("figuresTables/Figure [error_both].svg", p, width=8.25, height=11.75/1.9, units="in")
+```
+
+```{r fig.width=8, fig.height=6}
+leg <- get_legend(plot)
+
+p2<-ggarrange(
+  ggarrange(leg, plot_med, nrow=2, heights=c(0.05,1)),
+  plot+theme(axis.title.y = element_text(size=10), 
+             legend.position="none"),
+  heights=c(1, 0.75),
+  nrow=2, labels=c("A", "B"))
+
+p2
+
+saveRDS(p2, "figuresTables/Figure [error_both].rds")
+```
+
+
+```{r}
+## best estimate
+best <- error %>% ungroup(.) %>%
+  filter(bagged_detrans_absolute_error == min(bagged_detrans_absolute_error))
+
+worst <- error %>% ungroup(.) %>%
+  filter(bagged_detrans_absolute_error == max(bagged_detrans_absolute_error))
+
+paste0("best prediction: ", best$organism_name, "; AE: ", round(best$bagged_detrans_absolute_error))
+paste0("worst prediction: ", worst$organism_name, "; AE: ", round(worst$bagged_detrans_absolute_error))
+```
+
+```{r}
+## best estimate
+best <- error %>% ungroup(.) %>%
+  filter(bagged_detrans_relative_error == min(bagged_detrans_relative_error))
+
+worst <- error %>% ungroup(.) %>%
+  filter(bagged_detrans_relative_error == max(bagged_detrans_relative_error))
+
+paste0("best prediction: ", best$organism_name, "; RE: ", round(best$bagged_detrans_relative_error))
+paste0("worst prediction: ", worst$organism_name, "; RE: ", round(worst$bagged_detrans_relative_error))
+```
+
+```{r}
+## END SCRIPT
+```
+

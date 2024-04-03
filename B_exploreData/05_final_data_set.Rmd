@@ -1,0 +1,968 @@
+---
+title: "Final data set"
+output:
+  html_notebook:
+        code_folding: hide
+  pdf_document: default
+---
+
+NB: data cleaning only applied to age at maturity data (lifespan data not used)
+
+```{r setup, include=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r message=FALSE}
+library(eulerr)
+library(ggVennDiagram)
+library(tidyverse)
+```
+
+```{r}
+## PLOT DB DATA ----
+
+age_mat <- read.csv("figuresTables/Table S[db_age_mat_prep].csv")
+lifespan <- read.csv("figuresTables/Table S[db_lifespan].csv")
+
+## summarise ----
+genome_spp_per_source <- age_mat %>%
+        select(source, organism_name) %>% unique(.) %>%
+        group_by(source) %>% summarise(num_entries=n())
+
+genome_spp_per_source
+
+## make a quick euler plot of species (not estimates)
+source_organism_names <- with(age_mat %>%
+                                      select(organism_name, source) %>%
+                                      unique(.) %>%
+                                filter(source %in% (genome_spp_per_source %>%
+                                                      filter(num_entries >1) %>%
+                                                      pull(source))),
+                              split(organism_name, source))
+
+euler_plot <- euler(source_organism_names)
+plot(euler_plot, labels = TRUE, quantities = TRUE, main="Age at maturity")
+
+names(source_organism_names) <- gsub(" ", "\n", names(source_organism_names))
+
+ggvenn <- ggVennDiagram(
+  source_organism_names,
+  label="count",
+  label_alpha = 0,
+  label_size=3,
+  edge_size = 0.25,
+  set_size = 3)+
+  scale_fill_gradient(low="blue",high = "yellow", name="Count")+
+  ggtitle("Age at maturity")
+
+ggvenn
+```
+
+```{r}
+## summarise
+spp_per_source <- lifespan %>%
+        select(source, organism_name) %>% unique(.) %>%
+        group_by(source) %>% summarise(num_entires=n())
+
+spp_per_source
+
+source_organism_names <- with(lifespan %>%
+                                      select(organism_name, source) %>%
+                                      unique(.) %>%
+                                filter(source %in% (genome_spp_per_source %>%
+                                                      filter(num_entries >1) %>%
+                                                      pull(source))),
+                              split(organism_name, source))
+
+names(source_organism_names) <- gsub("Animal Diversity Web", "Animal Diversity Web\n", names(source_organism_names))
+
+euler_plot <- euler(source_organism_names)
+plot(euler_plot, labels = TRUE, quantities = TRUE, main="Lifespan                         ")
+
+names(source_organism_names) <- gsub(" ", "\n", names(source_organism_names))
+
+ggvenn <- ggVennDiagram(
+  source_organism_names,
+  label="count",
+  label_alpha = 0,
+  label_size=3,
+  edge_size = 0.25,
+  set_size = 3)+
+  scale_fill_gradient(low="blue",high = "yellow", name="Count")+
+  ggtitle("Lifespan")
+
+ggvenn
+```
+
+```{r}
+## PREPROCESS DB DATA ----
+
+## age_mat ----
+
+## dedup, remove outliers and summarise
+age_mat_sum <- age_mat %>%
+  ## deduplicate
+  select(organism_name, age_mat) %>%
+  unique(.) %>%
+  ## remove outliers
+  group_by(organism_name) %>%
+  mutate(iqrd = ifelse(age_mat < quantile(age_mat, 0.25) - 1.5 * IQR(age_mat) |
+                    age_mat > quantile(age_mat, 0.75) + 1.5 * IQR(age_mat),
+                  "remove",
+                  "keep")) %>%
+  filter(iqrd == "keep") %>%
+  summarise(mean_dedup_age_mat = mean(age_mat, na.rm=TRUE),
+            sd_dedup_age_mat = sd(age_mat, na.rm=TRUE),
+            median_dedup_age_mat = median(age_mat, na.rm=TRUE),
+            n_unique_reported_values = n())
+  
+## add estimates to database
+age_mat_db <- age_mat %>%
+  left_join(age_mat_sum) %>%
+  ## remove sex info
+  select(-sex) %>% unique(.) %>%
+  ## arrange columns order
+  relocate(model_group, class, 
+           # class_mod,
+           order, family, genus, organism_name,
+           common_name,
+           mean_dedup_age_mat, sd_dedup_age_mat, median_dedup_age_mat,
+           n_unique_reported_values, age_mat) %>%
+  ## sort by
+  arrange(organism_name, genus, family, order, class)
+
+## re export it
+age_mat_db_supp <- age_mat_db %>%
+  select(-c("sd_dedup_age_mat", "median_dedup_age_mat", 
+            # "class_mod", 
+            "n_unique_reported_values")) %>%
+  rename(known_age_mat = mean_dedup_age_mat)
+
+## overwrite
+write.csv(age_mat_db_supp, "figuresTables/Table S[db_age_mat].csv", 
+          row.names=F)
+
+## lifespan ----
+
+## dedup and summarise
+lifespan_sum <- lifespan %>%
+  ## deduplicate
+  select(organism_name, lifespan) %>%
+  unique(.) %>%
+  ## summarise
+  group_by(organism_name) %>%
+  summarise(mean_dedup_lifespan = mean(lifespan, na.rm=TRUE),
+            median_dedup_lifespan = median(lifespan, na.rm=TRUE),
+            n_unique_reported_values = n())
+
+## add lifespan to age at maturity  ---
+age_mat_ls <- age_mat_db %>%
+  select(-c(age_mat, source, orig_source, orig_source_text, common_name)) %>%
+  unique(.) %>%
+  left_join(., lifespan_sum %>%
+              select(organism_name, mean_dedup_lifespan) %>%
+              unique(.))
+
+names(age_mat_ls) <- gsub("_dedup", "", names(age_mat_ls))
+
+## add to pheno data ----
+
+## pheno data
+pheno_unmod <- read.csv("dataFiles/00.03_pheno.csv")
+
+pheno_ls_am <- pheno_unmod %>% 
+  full_join(., age_mat_ls)
+
+## remove extreme outliers ----
+
+## ID extreme outliers
+z_scores <- (pheno_ls_am[["mean_age_mat"]] - mean(pheno_ls_am[["mean_age_mat"]])) / sd(pheno_ls_am[["mean_age_mat"]])
+threshold <- 8
+outliers <- pheno_ls_am[abs(z_scores) > threshold, "organism_name"]
+
+## remove extreme outliers
+pheno_ls_am <- pheno_ls_am %>%
+  filter(!organism_name %in% outliers)
+
+## print outliers
+paste("*** extreme outliers (z-score > 8) removed:", outliers, " ***")
+
+## print values for outliers
+age_mat_db %>% filter(organism_name %in% outliers)
+
+## impute or add lifespan where missing ----
+missing_lifespans <- sort(pheno_ls_am %>% filter(is.na(mean_lifespan)) %>% pull(organism_name))
+paste("species with no lifespan info:")
+missing_lifespans
+
+## subset the data for species specific information
+impute_lifespan <- pheno_ls_am %>%
+  select(organism_name, class, order, family, genus, mean_lifespan) %>%
+  group_by(genus) %>%
+  add_tally() %>%
+  mutate(lifespan_imputed1 = ifelse(is.na(mean_lifespan),
+                                    mean(mean_lifespan, na.rm=TRUE),
+                                    mean_lifespan)) %>%
+  ungroup(.) %>%
+  select(-n) %>%
+  group_by(family) %>%
+  add_tally() %>%
+  mutate(lifespan_imputed2 = ifelse(is.na(lifespan_imputed1),
+                                    mean(mean_lifespan, na.rm=TRUE),
+                                    lifespan_imputed1)) %>%
+  ungroup(.) %>%
+  select(-n) %>%
+  group_by(order) %>%
+  add_tally() %>%
+  mutate(lifespan_imputed3 = ifelse(is.na(lifespan_imputed2),
+                                    mean(mean_lifespan, na.rm=TRUE),
+                                    lifespan_imputed2)) %>%
+  ungroup(.) %>%
+  select(-n) %>%
+  group_by(order) %>%
+  add_tally() %>%
+  mutate(lifespan_imputed = ifelse(is.na(lifespan_imputed3),
+                                   mean(mean_lifespan, na.rm=TRUE),
+                                   lifespan_imputed3)) %>%
+  ungroup(.) %>%
+  select(organism_name, lifespan_imputed)
+
+## missing
+missing_imputed_lifespans <- impute_lifespan %>% filter(is.na(lifespan_imputed))
+
+paste("species for which lifespan could not be imputed by kNN (should be none)")
+missing_imputed_lifespans
+
+## add to pheno data
+pheno_ls_am <- pheno_ls_am %>%
+  ## add values that could not be imputed using group means
+  mutate(mean_lifespan = case_when(
+    ## https://mexican-fish.com/kelp-perch/
+    organism_name == "Brachyistius frenatus" ~ 3,
+    #   ## url (orig source if avail)
+    #   organism_name == "Genus species" ~ 0,
+    ## add more conditions as needed
+    TRUE ~ mean_lifespan  # Keep the original value for all other cases
+  )) %>%
+  left_join(impute_lifespan) %>%
+  mutate(lifespan_imputed = ifelse(is.na(lifespan_imputed),
+                                   mean_lifespan,
+                                   lifespan_imputed))
+
+## check any remain
+if (any(is.na(pheno_ls_am$lifespan_imputed))) {
+  cat("Error: Missing records for 'imputed_lifespan' found. Exiting script.\n")
+  # sink(type = "message")
+  stop("Error: Missing records for 'imputed_lifespan' found. Exiting script.")
+}
+```
+
+
+```{r}
+## EDIT PHENO AND CPG DATA ----
+
+## define data sets
+data_sets <- c("AllHomo",
+               "FishDanio",
+               "MammalsHomo",
+               "ReptilesGallus")
+
+## if troubleshooting
+# data_set <- c("AllHomo")
+
+## loop through data set 
+for (data_set in data_sets) {
+  
+  data_set_tl <- tolower(data_set)
+  
+  ## IMPORT DATA ----
+  
+  ## cpg data
+  cpg_oe_data_full <- 
+    read.csv(paste0("../A_getGenomicData/dataFiles/04.00_cpg_oe_data_full_", data_set_tl, ".csv"), 
+             row.names=1)
+
+  ## pheno genomic
+  pheno_genomic <- read.csv(paste0("../A_getGenomicData/dataFiles/04.00_pheno_genomic_", data_set_tl, ".csv"))
+
+  ## subset pheno data for intersecting species ----
+  
+  ## remove species assemblies in phenodata but not cg oe data
+  no_cgoe_chords <- setdiff(pheno_ls_am$assembly_id, rownames(cpg_oe_data_full))
+  paste0("removing assembly with no cpg oe data from the phenodata: ", no_cgoe_chords)
+  pheno <- pheno_ls_am %>%
+    filter(., !assembly_id %in% no_cgoe_chords)
+  
+  ## remove species assemblies in the cg oe and dens data but not the pheno data
+  no_pheno_chords <- setdiff(rownames(cpg_oe_data_full), pheno$assembly_id)
+  paste0("removing assembly with no phenotype info from the cpg data: ", no_pheno_chords)
+  cpg_oe_data <- as.matrix(cpg_oe_data_full[!rownames(cpg_oe_data_full) %in% no_pheno_chords, ])
+  
+  ## edit cpg data ----
+  
+  ## reorder pheno df (IMPORTANT)
+  pheno <- arrange(pheno, assembly_id) %>%
+    ## remove duplicate entries
+    unique(.)
+  
+  ## check it worked
+  if (all(rownames(cpg_oe_data) == pheno$assembly_id)) {
+    cat("Assembly IDs are identical - you are good to go\n")
+  } else {
+    cat("Error: Assembly IDs are not identical in your cpg oe and your phenodata (and they need to be). Exiting script.\n")
+    sink(type = "message")
+    stop("Assembly ids are not identical in your cpg oe and your phenodata (and they need to be). Exiting script.")
+  }
+
+  ## create cpg data set with species names
+  rownames(cpg_oe_data) <- pheno$organism_name
+  
+  ## add pheno genomic info to age mat pheno
+  pheno <- pheno %>%
+    left_join(., pheno_genomic %>%
+                select(assembly_id, num_hits, 
+                       mean_hit_len, mean_nz_hit_len, 
+                       mean_perc_ident, mean_nz_perc_ident, 
+                       mean_cpg_oe, mean_nz_cpg_oe, 
+                       b_complete), 
+              by = "assembly_id")
+  
+  ## export files ----
+  
+  ## cpg oe
+  write.csv(cpg_oe_data, 
+            paste0("dataFiles/05.00_cpg_oe_data_", data_set_tl, ".csv"), 
+            row.names = TRUE)
+  
+  ## pheno data
+  write.csv(pheno, 
+            paste0("dataFiles/05.00_pheno_", data_set_tl, ".csv"),
+            row.names = FALSE)
+}
+```
+
+```{r}
+## stats for results
+
+print("Number of species in complete data set: ")
+length(unique(read.csv("figuresTables/Table S[db_age_mat].csv") %>%
+                pull(organism_name)))
+
+print("Number of species excluding outliers: ")
+nrow(read.csv("dataFiles/00.03_pheno.csv"))
+
+print("Number of species excluding those without any BLAST hits: ")
+nrow(read.csv("dataFiles/05.00_pheno_allhomo.csv"))
+
+print("Number of entries in the age at maturity data base: ")
+nrow(read.csv("figuresTables/Table S[db_age_mat].csv"))
+
+print("Number of original sources in the age at maturity data base: ")
+length(unique(read.csv("figuresTables/Table S[db_age_mat].csv") %>%
+                pull(orig_source)))
+
+print("Number of species in each model group: ")
+print(read.csv("dataFiles/05.00_pheno_allhomo.csv") %>%
+        group_by(model_group) %>%
+        summarise(n=n()))
+
+print("Number of birds in the reptile group: ")
+print(read.csv("dataFiles/05.00_pheno_allhomo.csv") %>%
+        filter(model_group=="Reptiles") %>%
+        group_by(class) %>%
+        summarise(n=n()))
+
+print("Number of orders in each reptile group: ")
+print(read.csv("dataFiles/05.00_pheno_allhomo.csv") %>%
+        filter(model_group=="Reptiles") %>%
+        select(class, order) %>%
+        unique(.) %>%
+        group_by(class) %>%
+        summarise(n=n()))
+
+print("Number of orders in each group: ")
+print(read.csv("dataFiles/05.00_pheno_allhomo.csv") %>%
+        select(model_group, order) %>%
+        unique(.) %>%
+        group_by(model_group) %>%
+        summarise(n=n()))
+
+```
+
+```{r load_libraries, include=FALSE}
+## EXPLORE DATA ----
+
+## load libraries
+library(viridis)
+library(ggpubr)
+library(ggridges) 
+
+## import full pheno data
+pheno_allhomo <- read.csv("dataFiles/05.00_pheno_allhomo.csv")
+```
+
+```{r}
+## CREATE NO HITS FILE ----
+
+pheno_fishdanio <- read.csv("dataFiles/05.00_pheno_fishdanio.csv")
+pheno_mammalshomo <- read.csv("dataFiles/05.00_pheno_mammalshomo.csv")
+pheno_reptilesgallus <- read.csv("dataFiles/05.00_pheno_reptilesgallus.csv")
+
+nh_allhomo <- pheno_ls_am %>%
+  filter(assembly_id %in% setdiff(pheno_ls_am$assembly_id, pheno_allhomo$assembly_id)) %>%
+  mutate(model = "All-vertebrate", reference_seqs = "Homo sapien") %>%
+  select(model, reference_seqs, model_group, class, order, organism_name, assembly_level, assembly_id)
+
+nh_fishdanio <- pheno_ls_am %>% filter(model_group == "Fish") %>%
+  filter(assembly_id %in% setdiff(pheno_ls_am$assembly_id, pheno_fishdanio$assembly_id)) %>%
+  mutate(model = "Fish-specific", reference_seqs = "Danio rerio") %>%
+  select(model, reference_seqs, model_group, class, order, organism_name, assembly_level, assembly_id)
+
+nh_mammalshomo <- pheno_ls_am %>% filter(model_group == "Mammals") %>%
+  filter(assembly_id %in% setdiff(pheno_ls_am$assembly_id, pheno_mammalshomo$assembly_id)) %>%
+  mutate(model = "Mammal-specific", reference_seqs = "Homo sapien") %>%
+  select(model, reference_seqs, model_group, class, order, organism_name, assembly_level, assembly_id)
+
+nh_reptilesgallus <- pheno_ls_am %>% filter(model_group == "Reptiles") %>%
+  filter(assembly_id %in% setdiff(pheno_ls_am$assembly_id, pheno_reptilesgallus$assembly_id)) %>%
+  mutate(model = "Reptile-specific", reference_seqs = "Gallus gallus") %>%
+  select(model, reference_seqs, model_group, class, order, organism_name, assembly_level, assembly_id)
+
+no_hits_all <- rbind(nh_allhomo, nh_fishdanio) %>%
+  rbind(., nh_mammalshomo) %>%
+  rbind(., nh_reptilesgallus)
+
+write.csv(no_hits_all, "figuresTables/Table S[no_hits_all].csv", row.names = FALSE)
+```
+
+```{r}
+## SUMMARISE CPG OE DATA ----
+
+## specify group colours
+reptiles <- scales::viridis_pal(option="D")(4)[1]
+mammals <- scales::viridis_pal(option="D")(4)[2]
+fish <- scales::viridis_pal(option="D")(4)[3]
+amphibians <- scales::viridis_pal(option="D")(4)[4]
+
+## re-list data sets
+data_sets <- c("allhomo", "fishdanio", "mammalshomo", "reptilesgallus")
+
+## create empty list for plots
+cpg_plots <- list()
+
+## loop through data sets to create plots
+for(i in 1:length(data_sets)) {
+  data_set=data_sets[i]
+  print(data_set)
+  
+  fillClr <- ifelse(data_set == "allhomo", 
+                   "grey", 
+                   ifelse(data_set == "mammalshomo", 
+                          mammals, 
+                          ifelse(data_set == "reptilesgallus", 
+                                 reptiles, 
+                                 ifelse(data_set == "fishdanio", 
+                                        fish, 
+                                        "red"))))
+  
+  ## create nice name
+  nice_name <- ifelse(data_set=="allhomo", "All", 
+                      ifelse(data_set=="mammalshomo", "Mammals", 
+                             ifelse(data_set=="reptilesgallus", "Reptiles", 
+                                    ifelse(data_set=="fishdanio", "Fish", 
+                                           "error"))))
+  
+  ## create necessary dfs
+  cpg_oe_na <- read.csv(paste0("dataFiles/05.00_cpg_oe_data_", data_set, ".csv"), row.names = 1)
+  
+  cpg_oe_0 <- read.csv(paste0("dataFiles/05.00_cpg_oe_data_", data_set, ".csv"), row.names = 1) %>%
+    replace(is.na(.), 0)
+  cpg_oe_na_filtered <- cpg_oe_na %>% select(which(colMeans(!is.na(.)) >= 0.1))
+  cpg_oe_0_filtered <- cpg_oe_na %>% select(which(colMeans(!is.na(.)) >= 0.1)) %>%
+    replace(is.na(.), 0)
+  
+  ## create plots
+  plot_na <- ggplot(cpg_oe_na %>% 
+                      rownames_to_column(., var = "variable") %>% 
+                      gather(., key = "variable", value = "CpG O/E"), 
+                    aes(x=`CpG O/E`)) + 
+    geom_histogram(colour="black", fill=fillClr) + 
+    ylab("Count")+xlab("CpG O/E\n(raw data)")+theme_bw()+
+    ggtitle(nice_name)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+          plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  plot_0 <- ggplot(cpg_oe_0 %>% 
+                      rownames_to_column(., var = "variable") %>% 
+                      gather(., key = "variable", value = "CpG O/E"), 
+                    aes(x=`CpG O/E`)) + 
+    geom_histogram(colour="black", fill=fillClr) + 
+    ylab("Count")+xlab("CpG O/E\n(zero imputed data)")+theme_bw()+
+    ggtitle(nice_name)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+          plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  plot_na_filt <- ggplot(cpg_oe_na_filtered %>% 
+                      rownames_to_column(., var = "variable") %>% 
+                      gather(., key = "variable", value = "CpG O/E"), 
+                    aes(x=`CpG O/E`)) + 
+    geom_histogram(colour="black", fill=fillClr) + 
+    ylab("Count")+xlab("CpG O/E\n(filtered data)")+theme_bw()+
+    ggtitle(nice_name)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+          plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  plot_0_filt <- ggplot(cpg_oe_0_filtered %>% 
+                      rownames_to_column(., var = "variable") %>% 
+                      gather(., key = "variable", value = "CpG O/E"), 
+                    aes(x=`CpG O/E`)) + 
+    geom_histogram(colour="black", fill=fillClr) + 
+    ylab("Count")+xlab("CpG O/E\n(filtered, zero imputed data)")+theme_bw()+
+    ggtitle(nice_name)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 6),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+          plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  cpg_plots[(4*(i-1) + 1):(4*i)] <- list(plot_na, plot_0, plot_na_filt, plot_0_filt)
+  
+  # ggarrange(plotlist=cpg_plots, nrow=1, ncol=4)
+  
+  ## create vars
+  
+  num_feats_na <- ncol(cpg_oe_na)
+  num_feats_na_filtered <- ncol(cpg_oe_na_filtered)
+  
+  # num_feats_0 <- ncol(cpg_oe_0)
+  # num_feats_0_filtered <- ncol(cpg_oe_0_filtered)
+  
+  summary_stats_na <- data.frame(column = c(
+    `Mean (SD)` = paste0(round(mean(cpg_oe_na %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                          " (", round(sd(cpg_oe_na %>% as.matrix(.), na.rm=TRUE), digits=2), ")"),
+    `Median [min, max]`= paste0(round(median(cpg_oe_na %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                                 " [", round(min(cpg_oe_na %>% as.matrix(.), na.rm=TRUE), digits=2), ", ",
+                                 round(max(cpg_oe_na %>% as.matrix(.), na.rm=TRUE), digits=2), "]"))) %>%
+    rename(!!nice_name := column) 
+  
+  summary_stats_na_filtered <- data.frame(column = c(
+    `Mean (SD)` = paste0(round(mean(cpg_oe_na_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                          " (", round(sd(cpg_oe_na_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), ")"),
+    `Median [min, max]`= paste0(round(median(cpg_oe_na_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                                 " [", round(min(cpg_oe_na_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), ", ",
+                                 round(max(cpg_oe_na_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), "]"))) %>%
+    rename(!!nice_name := column) 
+  
+  summary_stats_0 <- data.frame(column = c(
+    `Mean (SD)` = paste0(round(mean(cpg_oe_0 %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                          " (", round(sd(cpg_oe_0 %>% as.matrix(.), na.rm=TRUE), digits=2), ")"),
+    `Median [min, max]`= paste0(round(median(cpg_oe_0 %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                                 " [", round(min(cpg_oe_0 %>% as.matrix(.), na.rm=TRUE), digits=2), ", ",
+                                 round(max(cpg_oe_0 %>% as.matrix(.), na.rm=TRUE), digits=2), "]"))) %>%
+    rename(!!nice_name := column) 
+  
+  summary_stats_0_filtered <- data.frame(column = c(
+    `Mean (SD)` = paste0(round(mean(cpg_oe_0_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                          " (", round(sd(cpg_oe_0_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), ")"),
+    `Median [min, max]`= paste0(round(median(cpg_oe_0_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), 
+                                 " [", round(min(cpg_oe_0_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), ", ",
+                                 round(max(cpg_oe_0_filtered %>% as.matrix(.), na.rm=TRUE), digits=2), "]"))) %>%
+    rename(!!nice_name := column) 
+  
+  temp_data<-rbind(summary_stats_na, summary_stats_0, summary_stats_na_filtered, summary_stats_0_filtered, 
+                    `Number of features` = num_feats_na, 
+                   `Number of features (filtered data)` = num_feats_na_filtered)
+                    # `Number of features (>%% coverage)` = num_feats_na_filtered)
+  
+  assign(nice_name, temp_data)
+  
+  ## COMPARE PROMOTER COVERAGE ---
+  
+  for (group in levels(factor(pheno_allhomo$model_group))) {
+    # print(group)
+    
+    cpg_oe_na_filtered_df <- as.data.frame(cpg_oe_na_filtered) %>%
+      rownames_to_column(var="organism_name") %>%
+      full_join(., pheno_allhomo %>%
+                  select(organism_name, model_group), 
+                by="organism_name") %>%
+      filter(., model_group == group) %>%
+      select(-model_group)
+    
+    cpg_oe_na_df <- as.data.frame(cpg_oe_na) %>%
+      rownames_to_column(var="organism_name") %>%
+      full_join(., pheno_allhomo %>%
+                  select(organism_name, model_group), 
+                by="organism_name") %>%
+      filter(., model_group == group) %>%
+      select(-model_group)
+    
+    average_coverages <- cpg_oe_na_filtered_df %>%
+      mutate(total_values = rowSums(!is.na(.[, grepl("^FP", colnames(cpg_oe_na_filtered_df))])),
+             total_columns = sum(grepl("^FP", colnames(cpg_oe_na_filtered_df)))) %>%
+      group_by(organism_name) %>%
+      summarize(average_coverage = sum(total_values) / sum(total_columns) * 100) %>%
+      pull(average_coverage)
+    
+    average_coverages_nf <- cpg_oe_na_df %>%
+      mutate(total_values = rowSums(!is.na(.[, grepl("^FP", colnames(cpg_oe_na_df))])),
+             total_columns = sum(grepl("^FP", colnames(cpg_oe_na_df)))) %>%
+      group_by(organism_name) %>%
+      summarize(average_coverage = sum(total_values) / sum(total_columns) * 100) %>%
+      pull(average_coverage)
+    
+    average_coverage <- round(mean(average_coverages, na.rm=TRUE))
+    sd_coverage <- round(sd(average_coverages, na.rm=TRUE))
+    
+    average_coverage_nf <- round(mean(average_coverages_nf, na.rm=TRUE))
+    sd_coverage_nf <- round(sd(average_coverages_nf, na.rm=TRUE))
+    
+    promoters <- ifelse(data_set == "reptilesgallus", 
+                        "Gallus gallus", 
+                        ifelse(data_set == "mammalshomo", 
+                               "Homo sapien", 
+                               ifelse(data_set == "fishdanio", 
+                                      "Danio rerio", 
+                                      ifelse(data_set == "allhomo", 
+                                             "Homo sapien", 
+                                             "error"))))
+    
+    ifelse(average_coverage == 0,
+           "--",
+           print(paste0(group, " with ", promoters,
+                        " promoters (filtered data): Mean (SD) coverage = ",
+                        average_coverage, " (+/-", sd_coverage, ") %")))
+    
+    ifelse(average_coverage == 0, 
+           "--", 
+           print(paste0(group, " with ", promoters, 
+                        " promoters (UNfiltered data): Mean (SD) coverage = ", 
+                        average_coverage_nf, " (+/-", sd_coverage_nf, ") %")))
+    
+    print("##############")
+  }
+}
+
+# list.files("dataFiles/")
+
+```
+
+```{r}
+cpg_summary_stats <- cbind(All, Fish, Mammals, Reptiles) %>%
+  rownames_to_column(., var=" ")  %>%
+  mutate(` ` = gsub("[0-9]+", "", ` `)) %>%
+  # mutate(` ` = gsub("%%", "10%", ` `)) %>%
+  add_row(` ` = "~ CpG O/E (raw data) ~", 
+          All = " ", 
+          Fish = " ", 
+          Mammals = " ", 
+          Reptiles = "", 
+          .before = 1) %>%
+  add_row(` ` = "~ CpG O/E (zero imputed data) ~",
+        All = " ",
+        Fish = " ",
+        Mammals = " ",
+        Reptiles = "",
+        .before = 4) %>%
+  add_row(` ` = "~ CpG O/E (filtered data) ~", 
+          All = " ", 
+          Fish = " ", 
+          Mammals = " ", 
+          Reptiles = "", 
+          .before = 7) %>%
+  add_row(` ` = "~ CpG O/E (filtered, zero imputed data) ~", 
+          All = " ", 
+          Fish = " ", 
+          Mammals = " ", 
+          Reptiles = "", 
+          .before = 10) %>%
+  ## remove cpg O/E zero imputed rows
+  filter(!(row_number() %in% c(4, 5, 6)))
+
+## reorder
+cpg_plots_r <- cpg_plots[c(1, 5, 9, 13, 
+                         3, 7, 11, 15, 
+                         2, 6, 10, 14, 
+                         4, 8, 12, 16)]
+
+## remove cpg O/E not filtered but 0 data (not relevant)
+## NB these are now just the third row of plots
+cpg_plots_f <- cpg_plots_r[-c(9, 10, 11, 12)]
+```
+
+```{r}
+## SUMMARISE AGE MAT DATA ----
+
+## age mat summary stats ----
+age_mat_summary_stats<-
+  as.data.frame(t(pheno_allhomo %>%
+                    select(model_group, organism_name, mean_age_mat) %>%
+                    group_by(model_group) %>%
+                    summarise(`No. observations` = n(),
+                              `Mean (SD)` = paste0(round(mean(mean_age_mat), digits=2), 
+                                                    " (", round(sd(mean_age_mat), digits=2), ")"),
+                              `Median [min, max]`= paste0(round(median(mean_age_mat), digits=2), 
+                                                           " [", round(min(mean_age_mat), digits=2), ", ",
+                                                           round(max(mean_age_mat), digits=2), "]")) %>%
+                    ungroup() %>%
+                    add_row(pheno_allhomo %>%
+                              select(model_group, organism_name, mean_age_mat) %>%
+                              summarise(`No. observations` = n(),
+                                        `Mean (SD)` = paste0(round(mean(mean_age_mat), digits=2), 
+                                                              " (", round(sd(mean_age_mat), digits=2), ")"),
+                                        `Median [min, max]`= paste0(round(median(mean_age_mat), digits=2), 
+                                                                     " [", round(min(mean_age_mat), digits=2), ", ",
+                                                                     round(max(mean_age_mat), digits=2), "]")) %>%
+                              add_column(model_group = "All") %>%
+                              relocate(model_group)) %>% 
+                    rename(Model = model_group) %>% 
+                    column_to_rownames("Model"))) %>%
+  rownames_to_column(., var=" ") %>%
+  add_row(` ` = "~ Age at maturity ~", 
+          Amphibians = "", 
+          Fish = "", 
+          Mammals = "", 
+          Reptiles = "", 
+          All = "", .before = 2) %>%
+  select(-Amphibians) %>%
+  relocate(., All, .after=" ")
+
+## age mat summary stats (log) ----
+age_mat_summary_stats_log <-
+  as.data.frame(t(pheno_allhomo %>%
+                    select(model_group, organism_name, mean_age_mat) %>%
+                    mutate(mean_age_mat = log(mean_age_mat)) %>%
+                    group_by(model_group) %>%
+                    summarise(`No. observations` = n(),
+                              `Mean (SD)` = paste0(round(mean(mean_age_mat), digits=2), 
+                                                    " (", round(sd(mean_age_mat), digits=2), ")"),
+                              `Median [min, max]`= paste0(round(median(mean_age_mat), digits=2), 
+                                                           " [", round(min(mean_age_mat), digits=2), ", ",
+                                                           round(max(mean_age_mat), digits=2), "]")) %>%
+                    ungroup() %>%
+                    add_row(pheno_allhomo %>%
+                              mutate(mean_age_mat = log(mean_age_mat)) %>%
+                              select(model_group, organism_name, mean_age_mat) %>%
+                              summarise(`No. observations` = n(),
+                                        `Mean (SD)` = paste0(round(mean(mean_age_mat), digits=2), 
+                                                              " (", round(sd(mean_age_mat), digits=2), ")"),
+                                        `Median [min, max]`= paste0(round(median(mean_age_mat), digits=2), 
+                                                                     " [", round(min(mean_age_mat), digits=2), ", ",
+                                                                     round(max(mean_age_mat), digits=2), "]")) %>%
+                              add_column(model_group = "All") %>%
+                              relocate(model_group)) %>% 
+                    rename(Model = model_group) %>% 
+                    column_to_rownames("Model"))) %>%
+  rownames_to_column(., var=" ") %>%
+  add_row(` ` = "~ Age at maturity (ln) ~", 
+          Amphibians = "", 
+          Fish = "", 
+          Mammals = "", 
+          Reptiles = "", 
+          All = "", .before = 2) %>%
+  select(-Amphibians) %>%
+  relocate(., All, .after=" ") %>%
+  ## remove top row
+  filter(!(row_number() %in% c(1)))
+
+## age mat histograms ----
+
+sm_plots <- list()
+
+for(i in 1:nlevels(factor(pheno_allhomo$model_group))) {
+  
+  data_set=levels(factor(pheno_allhomo$model_group))[i]
+  # print(data_set)
+  
+  fillClr <- ifelse(data_set == "All", 
+                    "grey30", 
+                    ifelse(data_set == "Mammals", 
+                           mammals, 
+                           ifelse(data_set == "Reptiles", 
+                                  reptiles, 
+                                  ifelse(data_set == "Fish", 
+                                         fish, 
+                                         "red"))))
+  
+  plot_sm <- ggplot(pheno_allhomo %>%
+                      filter(model_group == data_set), 
+       aes(x=mean_age_mat)) + 
+  geom_histogram(colour="black", fill=fillClr) + 
+  ylab("Count")+xlab("Known age at\n maturity (years)")+
+  theme_bw()+ggtitle(data_set)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 7),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+        plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  plot_sm_log <- ggplot(pheno_allhomo %>%
+                      filter(model_group == data_set), 
+       aes(x=log(mean_age_mat))) + 
+  geom_histogram(colour="black", fill=fillClr) + 
+  ylab("Count")+xlab("Known age at\n maturity (ln)")+
+    theme_bw()+ggtitle(data_set)+
+    theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 7),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+          axis.title.y = element_text(size = 8),
+        plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+  
+  sm_plots[(2*(i-1) + 1):(2*i)] <- list(plot_sm, plot_sm_log)
+}
+
+## remove Amphibian plots
+sm_plots <- sm_plots[-c(1, 2)]
+
+plot_sm <- ggplot(pheno_allhomo, 
+       aes(x=mean_age_mat)) + 
+  geom_histogram(colour="black", fill="grey") + 
+  ylab("Count")+xlab("Known age at\n maturity (years)")+
+  theme_bw()+ggtitle("All")+
+  theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 7),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+        axis.title.y = element_text(size = 8),
+        plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+
+plot_sm_log <- ggplot(pheno_allhomo, 
+       aes(x=log(mean_age_mat))) + 
+  geom_histogram(colour="black", fill="grey") + 
+  ylab("Count")+xlab("Known age at\n maturity (ln)")+
+  theme_bw()+ggtitle("All")+
+  theme(plot.title = element_text(size = 9), 
+          axis.text.y = element_text(size = 7),
+          axis.text.x = element_text(size = 7),
+          axis.title.x = element_text(size = 8), 
+        axis.title.y = element_text(size = 8),
+        plot.margin = unit(c(0.05, 0.05, 0.05, 0.05), "cm"))
+
+## add All data plots
+sm_plots <- c(list(plot_sm, plot_sm_log), sm_plots)
+
+## reorder
+sm_plots <- sm_plots[c(1, 3, 5, 7, 
+                         2, 4, 6, 8)]
+
+# ## print
+# ggarrange(plotlist=sm_plots, nrow=2, ncol=4)
+```
+
+```{r warning=FALSE}
+## combine the plots
+combined_plots <- c(sm_plots, cpg_plots_f)
+
+## save them (takes ages)
+ggsave("figuresTables/Figure S[hists].png",
+       ggarrange(plotlist=combined_plots, ncol=4, nrow=5),
+       width=8.75,
+       height=11.25*0.9,
+       units="in")
+
+## tidy
+rm(plot_sm)
+rm(plot_sm_log)
+rm(sm_plots)
+rm(cpg_plots_f)
+rm(combined_plots)
+```
+
+```{r}
+## combine the summary stats table
+summary_stats <- rbind(age_mat_summary_stats, age_mat_summary_stats_log, cpg_summary_stats) %>%
+  rename("Model group:" = " ")
+summary_stats <- summary_stats[c(1, 17, 18, 2:16), ]
+summary_stats
+
+write.csv(summary_stats, "figuresTables/Table S[sum_stats].csv", row.names=FALSE)
+```
+
+```{r}
+## print some values for in text
+paste("There are a total of", 
+      length(unique(pheno_allhomo$organism_name)), 
+             "species in the dataset.", sep = " ")
+
+paste("representing", 
+      length(unique(pheno_allhomo$class)), 
+             "different classes", 
+             sep = " ")
+
+paste("number in each class by group: ")
+print(pheno_allhomo %>%
+  group_by(model_group, class) %>%
+  count(.) %>%
+  arrange(., desc(model_group)))
+
+paste("representing", 
+      length(unique(pheno_allhomo$order)), 
+             "different orders", 
+             sep = " ")
+
+paste("number in each order by group: ")
+print(pheno_allhomo %>%
+  group_by(model_group, order) %>%
+  count(.) %>%
+  arrange(., desc(model_group)))
+```
+
+```{r}
+## range
+paste("Known ages at maturity ranged from... ")
+      
+## min
+paste(round(pheno_allhomo %>% 
+              slice_min(mean_age_mat) %>%
+              pull(mean_age_mat), digits = 2),
+      "years in", 
+      pheno_allhomo %>% 
+        slice_min(mean_age_mat) %>%
+        pull(organism_name),
+      sep = " ")
+
+paste("... to ... ")
+
+## max
+paste(round(pheno_allhomo %>% 
+              slice_max(mean_age_mat) %>%
+              pull(mean_age_mat), digits = 2),
+      "years in", 
+      pheno_allhomo %>% 
+        slice_max(mean_age_mat) %>%
+        pull(organism_name),
+      sep = " ")
+
+age_mat_db %>% slice_min(mean_dedup_age_mat)
+age_mat_db %>% filter(!organism_name %in% outliers) %>% 
+  slice_max(mean_dedup_age_mat)
+```
+
+```{r}
+## END SCRIPT
+```
+
+
+
+
+
+
+
+
+

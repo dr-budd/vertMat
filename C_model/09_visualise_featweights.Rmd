@@ -1,0 +1,215 @@
+---
+title: "visualise weights"
+author: "Alyssa"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    code_folding: hide
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, warning=FALSE, message=FALSE}
+current_directory <- dirname(rstudioapi::getActiveDocumentContext()$path)
+knitr::opts_knit$set(root.dir=normalizePath(paste0(current_directory)))
+```
+
+```{r warning=FALSE, message=FALSE}
+## load libraries
+library(ggpubr)
+library(tidyverse)
+```
+
+```{r}
+## define data sets
+data_sets <- c("AllHomo",
+               "FishDanio",
+               "MammalsHomo",
+               "ReptilesGallus")
+
+## import data
+for (data_set in data_sets) {
+  data_set_tl <- tolower(data_set)
+  assign(paste0("data_", data_set_tl), 
+         read.csv(paste0("dataFiles/07.00_glmnet_weights_", data_set_tl, ".csv")) %>% 
+           mutate(model = data_set_tl)%>%
+    filter(feature_id != "(Intercept)")) 
+}
+
+## read in promoter names from HPC
+promoter_names_reptiles <- read.table("../A_getGenomicData/promoterNames/epd_gallus_gallus_names.txt") %>%
+  rename(feature_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+
+promoter_names_mammals <- read.table("../A_getGenomicData/promoterNames/epd_mus_musculus_names.txt") %>%
+  rename(feature_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+                                 
+promoter_names_fish <- read.table("../A_getGenomicData/promoterNames/epd_danio_rerio_names.txt") %>%
+  rename(feature_id = V1, name = V2) %>%
+  mutate(name = gsub("_1", "", name))
+
+data_allhomo <- left_join(data_allhomo, promoter_names_mammals)
+data_fishdanio <- left_join(data_fishdanio, promoter_names_fish)
+data_mammalshomo <- left_join(data_mammalshomo, promoter_names_mammals)
+data_reptilesgallus <- left_join(data_reptilesgallus, promoter_names_reptiles)
+```
+
+
+```{r}
+## import species orders (taxonomic rank)
+order_groups <- read.csv("dataFiles/07.00_glmnetcv_phenoresults_allhomo.csv") %>%
+  mutate(feature_id = paste0("order", order)) %>%
+  select(model_group, feature_id) %>%
+  unique(.)
+
+combined <- bind_rows(data_allhomo, data_fishdanio, data_mammalshomo, data_reptilesgallus) %>%
+  relocate(model) %>%
+  pivot_longer(., starts_with("model_"), names_to = "mod_num_labs", values_to="weight") %>%
+  mutate(model_number = as.numeric(gsub("model_", "", mod_num_labs)),
+         label = ifelse(!is.na(name), name, 
+                        ifelse(grepl("order", feature_id), gsub("order", "", feature_id), 
+                               ifelse(grepl("prop_gc", feature_id), "Proportion GC",
+                               feature_id)))) %>%
+  mutate(model_order = gsub("allhomo", 4, model) %>%
+                            gsub("mammalshomo", 3, .) %>%
+                            gsub("reptilesgallus", 2, .) %>%
+                            gsub("fishdanio", 1, .)) %>%
+  ## add groups
+  left_join(., order_groups) %>%
+  ## order label by order
+  arrange(model_group) %>%
+  mutate(feature_id_ordered = factor(feature_id, levels=unique(feature_id)), 
+         label_ordered = factor(label, levels=unique(label))) %>%
+  ## add predictor type
+  mutate(predictor_type = ifelse(grepl("order", feature_id), 
+                                        "Order", 
+                                        ifelse(feature_id == "prop_gc", 
+                                               "GC proportion", 
+                                               ifelse(grepl("FP", feature_id),
+                                                      "Promoter", 
+                                                      "Other"))))
+
+# combined
+```
+
+```{r}
+## create supp table
+feat_weights <- combined %>%
+  mutate(model = gsub("allhomo", "All-vertebrate", model) %>%
+           gsub("fishdanio", "Fish-specific", .) %>%
+           gsub("reptilesgallus", "Reptile-specific", .) %>%
+           gsub("mammalshomo", "Mammal-specific", .)) %>%
+  mutate(feature_name = ifelse(predictor_type == "Order", 
+                               gsub("order", "", feature_id), 
+                               ifelse(predictor_type == "Promoter", 
+                                      name, 
+                                      feature_id))) %>%
+  rename(feature_type = predictor_type) %>%
+  select(model, model_number, feature_type, feature_id, feature_name, weight)
+
+write.csv(feat_weights, "figuresTables/Table S[feat_weights].csv", row.names=FALSE)
+```
+
+```{r fig.width=9, fig.height=12}
+generate_plot <- function(model_name, combined_data, prdctr_type) {
+  plot <- ggplot(combined_data %>%
+                   filter(predictor_type == prdctr_type) %>%
+                   filter(model == model_name) %>%
+                   mutate(#weight = round(as.numeric(weight), digits=2),
+                          weight = ifelse(weight == 0, NA, weight)) %>%
+                   arrange(model_order) %>%
+                   mutate(feature_id_ordered = factor(feature_id, levels = unique(feature_id)),
+                          label_ordered = factor(label, levels = unique(label))),
+                 aes(x = model_number, y = label_ordered, fill = weight)) +
+    scale_x_continuous(breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10), 
+                       limits=c(0,11)) +
+    geom_tile() +
+    scale_fill_viridis_c(na.value = "white", name="Weight", 
+                         limits=c(min(combined$weight, na.rm=TRUE), 
+                                  max(combined$weight, na.rm=TRUE))) +
+    labs(x = "Model", y = prdctr_type) +
+    theme_bw() +
+    theme(axis.text.y = element_text(size = 2),
+          legend.key.size = unit(0.25, "cm"),
+          legend.title = element_text(size = 8),
+          legend.text = element_text(size = 6, angle=90),
+          strip.placement = "outside",
+          legend.position = "bottom",
+          strip.text.y.left = element_text(angle = 90))
+  
+  return(plot)
+}
+
+
+
+feat_plot <- ggarrange(
+  ## order 
+  generate_plot("allhomo", combined, "Order")+
+    ggtitle("All-vertebrate")+
+    theme(axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()), 
+  generate_plot("fishdanio", combined, "Order")+
+    ggtitle("Fish-specific")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()),
+  generate_plot("mammalshomo", combined, "Order")+
+    ggtitle("Mammal-specific")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()), 
+  generate_plot("reptilesgallus", combined, "Order")+
+    ggtitle("Reptile-specific")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()), 
+  ## gc plot
+  generate_plot("allhomo", combined, "GC proportion")+
+    theme(axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()),
+  generate_plot("fishdanio", combined, "GC proportion")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()),
+  generate_plot("mammalshomo", combined, "GC proportion")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()),
+  generate_plot("reptilesgallus", combined, "GC proportion")+
+    theme(axis.title.y = element_blank(), 
+          axis.text.y = element_blank(), 
+          axis.title.x = element_blank(), 
+          axis.text.x = element_blank()), 
+  ## promoter plot
+  generate_plot("allhomo", combined, "Promoter")+
+    theme(axis.text.y = element_blank()),
+  generate_plot("fishdanio", combined, "Promoter")+
+    theme(axis.text.y = element_blank(), 
+          axis.title.y = element_blank()),
+  generate_plot("mammalshomo", combined, "Promoter")+
+    theme(axis.text.y = element_blank(), 
+          axis.title.y = element_blank()), 
+  generate_plot("reptilesgallus", combined, "Promoter")+
+    theme(axis.text.y = element_blank(), 
+          axis.title.y = element_blank()), 
+  ncol=4, nrow=3, common.legend = TRUE, legend="bottom")
+
+feat_plot
+
+ggsave("figuresTables/Figure S[feats].png", width=8.75, height=11.25, units="in")
+```
+
+```{r}
+## END SCRIPT
+```
+
+
