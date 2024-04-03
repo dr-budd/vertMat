@@ -2,7 +2,7 @@
 
 Analysis pipeline for:
 
->Budd et al. (in prep) Universal prediction of age at maturity in vertebrates
+>Budd et al. (in prep) Universal prediction of vertebrate species age at maturity
 
 ---
 
