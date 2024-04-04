@@ -64,7 +64,7 @@ Folder: `notebooks/<DATASET_NAME>_pi.ipynb`
 Suk Yee Yong (sukyee.yong@csiro.au)
 
 ## About
-Original code from https://bitbucket.csiro.au/scm/~yon012/life_pi.git. This project is being developed as part of Scientific Computing Collaboration Project 2023H2 for [ERRFP 1302: How long (ish) do fish live? Estimating prediction error for regularised regression](https://confluence.csiro.au/pages/viewpage.action?spaceKey=SCinternal&title=ERRFP-1302).
+Original code from https://bitbucket.csiro.au/scm/sccp-sukyee/life_pi.git. This project is being developed as part of Scientific Computing Collaboration Project 2023H2 for [ERRFP 1302: How long (ish) do fish live? Estimating prediction error for regularised regression](https://confluence.csiro.au/pages/viewpage.action?spaceKey=SCinternal&title=ERRFP-1302).
 
 ## Acknowledgements
 The script `life_pi/lib/run_uqregresor.py` has been adapted from [uncertain_blackholemass](https://github.com/yongsukyee/uncertain_blackholemass) repository.  
