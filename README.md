@@ -16,7 +16,7 @@ The code is separated into the following three folders:
 
 `C_model` - All modelling steps and data including figure generation.
 
-`life_pi` - Contains prediction interval steps from https://bitbucket.csiro.au/users/yon012/repos/life_pi/browse and written by Suk Yee Yong (sukyee.yong@csiro.au). Included here for use in figure generation.  
+`life_pi` - Contains prediction interval steps from https://bitbucket.csiro.au/projects/SCCP-SUKYEE/repos/life_pi/browse and written by Suk Yee Yong (sukyee.yong@csiro.au). Included here for use in figure generation.  
 
 ## Data
 
