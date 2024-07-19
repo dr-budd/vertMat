@@ -6,10 +6,6 @@ models<-c("AllHomoUnknowns",
           "MammalsHomoUnknowns",
           "ReptilesGallusUnknowns")
 
-## for testing
-# models<-c("AllHomoUnknowns")
-# mod<-c("ReptilesGallusUnknowns")
-
 ## set working to script location
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 

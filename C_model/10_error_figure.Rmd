@@ -187,7 +187,6 @@ names(cols) <- levels(factor(error$category))
 options(ggimage.keytype = "point")
 ```
 
-
 ```{r fig.width = 8, fig.height=3}
 ## both together
 
@@ -301,7 +300,6 @@ tTestTrans <- function(df1, df2, values) {
 }
 
 ```
-
 
 ```{r}
 ## TTEST TRAINING DATA ----
@@ -483,7 +481,6 @@ rha_ae_ttest <- tTestTrans(df1=df_test_Reptiles_homo_All,
                       df2=df_Reptiles_homo_All, 
                       values=bagged_detrans_absolute_error)
 ```
-
 
 ```{r}
 ## and test
@@ -672,7 +669,6 @@ p2
 
 saveRDS(p2, "figuresTables/Figure [error_both].rds")
 ```
-
 
 ```{r}
 ## best estimate

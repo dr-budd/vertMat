@@ -25,6 +25,8 @@ library(ggpubr)
 library(ggbreak)
 library(patchwork)
 library(ggimage)
+library(eulerr)
+library(gridExtra)
 
 set.seed(1)
 ```
@@ -38,7 +40,7 @@ promoter_names_gallus <- read.table("../A_getGenomicData/promoterNames/epd_gallu
   rename(promoter_id = V1, name = V2) %>%
   mutate(name = gsub("_1", "", name))
 
-promoter_names_homo <- read.table("../A_getGenomicData/promoterNames/epd_homo_sapien_names.txt") %>%
+promoter_names_homo <- read.table("../A_getGenomicData/promoterNames/epd_homo_sapiens_names.txt") %>%
   rename(promoter_id = V1, name = V2) %>%
   mutate(name = gsub("_1", "", name))
 
@@ -73,7 +75,9 @@ predictive_features_all <- full_join(
   full_join(., nonzero_features_avg_fish %>%
     mutate(model="Fish")) %>%
   full_join(., nonzero_features_avg_allvert %>%
-    mutate(model="All-vertebrate"))
+    mutate(model="All-vertebrate")) %>%
+  group_by(model) %>%
+  mutate(q_value_nz = p.adjust(p_value_nz, method="fdr"))
 
 ## only sig promoters
 predictive_promoters_sig_all <- predictive_features_all %>%
@@ -81,7 +85,6 @@ predictive_promoters_sig_all <- predictive_features_all %>%
   filter(!is.na(name)) %>%
   ## only sig corr
   filter(!is.na(sig_corr_nz))
-  
 ```
 
 ```{r}
@@ -100,15 +103,17 @@ nmam_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_mammalshomo.rds"), i
 nrept_mods <- sum(!sapply(readRDS("dataFiles/07.00_modellist_reptilesgallus.rds"), is.null))
 
 ## subset for those in all models
-predictive_promoters_sig_sub <- predictive_promoters_sig_all %>%
+predictive_promoters_sig_all2 <- predictive_promoters_sig_all %>%
   ## add total
   mutate(ttl_models = as.numeric(ifelse(model=="All-vertebrate", nav_mods, 
                              ifelse(model=="Fish", nfish_mods, 
                                     ifelse(model=="Mammal", nmam_mods,
                                            ifelse(model=="Reptile", nrept_mods, 
                                                   "error")))))) %>%
-  mutate(perc_mods = (100/ttl_models*number_of_models)) %>%
-  ## only promoters in more than n the partitions
+  mutate(perc_mods = (100/ttl_models*number_of_models)) 
+
+predictive_promoters_sig_sub <- predictive_promoters_sig_all2 %>%
+  ## only promoters in more than n % of the partitions
   filter(perc_mods == 100)
 
 ## plot sig cutoff
@@ -138,97 +143,209 @@ psc <- ggplot(psc_data %>%
 # psc
 ```
 
+## compare with li et al., 2024 data
+
+```{r}
+cesar <- read.csv("dataFiles/li_2024_table_s7.csv")
+
+cesar_genes <- cesar %>%
+  pull(Symbol) %>%
+  unique(.)
+
+mammal_genes <- predictive_promoters_sig_all2 %>%
+  filter(., model=="Mammal") %>%
+  filter(q_value_nz > 0.05) %>%
+  pull(name) %>%
+  unique(.)
+
+intersect(cesar_genes, mammal_genes)
+```
+
+```{r}
+cesar <- read.csv("dataFiles/li_2024_table_s7.csv")
+
+cesar_genes <- cesar %>%
+  filter(Symbol != "N/A") %>%
+  filter(Symbol != "") %>%
+  pull(Symbol) %>%
+  unique(.)
+
+mammal_genes <- predictive_promoters_sig_all2 %>%
+  filter(., model=="Mammal") %>%
+  ## only promoters in more than n % of the partitions
+  filter(perc_mods > 50) %>%
+  pull(name) %>%
+  unique(.)
+
+intersect(cesar_genes, mammal_genes)
+```
+
+```{r fig.width=7, fig.height=3.5}
+## create a list of the sets
+gene_sets <- list(
+  `Li et al. (2024)` = cesar_genes,
+  `This study` = mammal_genes
+)
+
+## plot the Euler diagram
+euler_plot <- plot(euler(gene_sets),
+                   quantities = list(cex = 1),
+                   alpha = 0.8,
+                   # labels = FALSE,
+                   fill = c("lightgreen", "lightblue"))
+
+
+
+## convert to ggplot and annotate
+gg_euler_plot <- as.ggplot(euler_plot)
+gg_euler_annotated <- gg_euler_plot+
+  theme(plot.margin = margin(0.5,0.5,0.5,0.5, "cm"))+
+  annotate("text", x=0.25, y=0.1, label=paste0(intersect(mammal_genes, cesar_genes)[1:4], collapse=", "))+
+  annotate("text", x=0.25, y=0.05, label=paste0(intersect(mammal_genes, cesar_genes)[5:9], collapse=", "))+
+  annotate("segment", x = 0.3, xend = 0.39, y = 0.15, yend = 0.46, color = "black")
+# gg_euler_annotated
+```
+
+
+```{r}
+intersect(mammal_genes, cesar_genes)
+```
+
+```{r}
+table_data <- tibble(
+  Gene=intersect(mammal_genes, cesar_genes),
+  `Full name`=c("Estrogen related receptor beta", 
+                "Fas associated factor 1", 
+                "RNA binding motif protein 10", 
+                "Zinc finger MIZ-type containing 1", 
+                "Dicer 1, ribonuclease III", 
+                "Transient receptor potential cation channel subfamily M member 3", 
+                "LPS responsive beige-like anchor protein", 
+                "Neuroplastin", 
+                "Kinesin family member C3"),
+  `Summary`=c("This gene encodes a protein with similarity to the estrogen receptor. Its function is unknown; however, a similar protein in mouse plays an essential role in placental development. [provided by RefSeq, Jul 2008]", ## (ESRRB)
+              "Interaction of Fas ligand (TNFSF6) with the FAS antigen (TNFRSF6) mediates programmed cell death, also called apoptosis, in a number of organ systems. The protein encoded by this gene binds to FAS antigen and can initiate apoptosis or enhance apoptosis initiated through FAS antigen. Initiation of apoptosis by the protein encoded by this gene requires a ubiquitin-like domain but not the FAS-binding domain. [provided by RefSeq, Jul 2008]", ## (FAF1)
+              "This gene encodes a nuclear protein that belongs to a family proteins that contain an RNA-binding motif. The encoded protein associates with hnRNP proteins and may be involved in regulating alternative splicing. Defects in this gene are the cause of the X-linked recessive disorder, TARP syndrome. Alternate splicing results in multiple transcript variants.[provided by RefSeq, Mar 2011]", ## (RBM10)
+              "This gene encodes a member of the PIAS (protein inhibitor of activated STAT) family of proteins. The encoded protein regulates the activity of various transcription factors, including the androgen receptor, Smad3/4, and p53. The encoded protein may also play a role in sumoylation. A translocation between this locus on chromosome 10 and the protein tyrosine kinase ABL1 locus on chromosome 9 has been associated with acute lymphoblastic leukemia. [provided by RefSeq, Mar 2010]", ## (ZMIZ1)
+              "This gene encodes a protein possessing an RNA helicase motif containing a DEXH box in its amino terminus and an RNA motif in the carboxy terminus. The encoded protein functions as a ribonuclease and is required by the RNA interference and small temporal RNA (stRNA) pathways to produce the active small RNA component that represses gene expression. This protein also acts as a strong antiviral agent with activity against RNA viruses, including the Zika and SARS-CoV-2 viruses. Alternative splicing results in multiple transcript variants. [provided by RefSeq, Jul 2021]", ## (DICER1)
+              "The product of this gene belongs to the family of transient receptor potential (TRP) channels. TRP channels are cation-selective channels important for cellular calcium signaling and homeostasis. The protein encoded by this gene mediates calcium entry, and this entry is potentiated by calcium store depletion. Alternatively spliced transcript variants encoding different isoforms have been identified. [provided by RefSeq, Jul 2008]", ## (TRPM3)
+              "The protein encoded by this gene is a member of the WDL-BEACH-WD (WBW) gene family. Its expression is induced in B cells and macrophages by bacterial lipopolysaccharides (LPS). The encoded protein associates with protein kinase A and may be involved in leading intracellular vesicles to activated receptor complexes, which aids in the secretion and/or membrane deposition of immune effector molecules. Defects in this gene are associated with the disorder common variable immunodeficiency-8 with autoimmunity. Two transcript variants encoding different isoforms have been found for this gene. [provided by RefSeq, Dec 2012]", ## (LRBA)
+              "This gene encodes a type I transmembrane protein belonging to the Ig superfamily. The protein is believed to be involved in cell-cell interactions or cell-substrate interactions. Alternative splicing results in multiple transcript variants. [provided by RefSeq, May 2009]", ## (NPTN)
+              "This gene encodes a member of the kinesin-14 family of microtubule motors. Members of this family play a role in the formation, maintenance and remodeling of the bipolar mitotic spindle. The protein encoded by this gene has cytoplasmic functions in the interphase cells. It may also be involved in the final stages of cytokinesis. Alternative splicing results in multiple transcript variants encoding different isoforms. [provided by RefSeq, Jan 2016]") ## (KIFC3)
+)
+
+table_data
+```
+
+```{r fig.width=7, fig.height=7}
+tbl1 <- tableGrob(table_data %>% select(-Summary), theme=ttheme_minimal())
+combined <- wrap_plots(gg_euler_annotated, tbl1, design="AA
+           BB")
+combined
+
+ggsave(paste0("figuresTables/Figure S[compare_cesar].png"),
+       width = 7,
+       height = 7,
+       units = "in")
+```
+
 ## gene ontology
 
 ```{r}
 ## filter for positive
 positive_promoters_sig_all <- predictive_promoters_sig_all %>%
-  filter(npv == "Positive")
+  filter(npv == "Positive") %>%
+  ## order by strength of correlation (for GSEA type analysis)
+  arrange(desc(abs_mean_weight))
 
 ## filter for negative
 negative_promoters_sig_all <- predictive_promoters_sig_all %>%
-  filter(npv == "Negative")
+  filter(npv == "Negative") %>%
+  ## order by strength of correlation (for GSEA type analysis)
+  arrange(desc(abs_mean_weight))
 ```
 
-
 ```{r warning=FALSE, message=FALSE}
-## FUNCTIONAL ANAL (optional - see next chunk if not re-running)----
+## FUNCTIONAL ANAL (optional - see below if you don't want to re-run every time)----
 
-# Sys.time()
-# 
-# ## NB: gprofiler2 package supports all the same organisms, namespaces
-# ## and data sources as the web tool.
-# ## The list of organisms and corresponding data sources is
-# ## available here: https://biit.cs.ut.ee/gprofiler/page/organism-list.
-# 
-# 
-# multi_gos_res_reptiles = gost(query=list("Reptiles - positively associated" =
-#                                            positive_promoters_sig_all %>% 
-#                                            filter(model == "Reptile") %>% pull(name),
-#                                          "Reptiles - negatively associated" =
-#                                            negative_promoters_sig_all %>% 
-#                                            filter(model == "Reptile") %>% pull(name)),
-#                               organism = "ggallus")
-# 
-# multi_gos_res_mammals = gost(query=list("Mammals - positively associated" =
-#                                            positive_promoters_sig_all %>% 
-#                                            filter(model == "Mammal") %>% pull(name),
-#                                         "Mammals - negatively associated" =
-#                                            negative_promoters_sig_all %>% 
-#                                            filter(model == "Mammal") %>% pull(name)),
-#                              organism = "hsapiens")
-# 
-# multi_gos_res_allvert = gost(query=list("All-vertebrates - positively associated" =
-#                                            positive_promoters_sig_all %>% 
-#                                            filter(model == "All-vertebrate") %>% pull(name),
-#                                         "All-vertebrates - negatively associated" =
-#                                            negative_promoters_sig_all %>% 
-#                                            filter(model == "All-vertebrate") %>% pull(name)),
-#                              organism = "hsapiens")
-# 
-# multi_gos_res_fish = gost(query=list("Fish - positively associated" =
-#                                        negative_promoters_sig_all %>% 
-#                                        filter(model == "Fish") %>% pull(name),
-#                                      "Fish - negatively associated" =
-#                                        negative_promoters_sig_all %>% 
-#                                        filter(model == "Fish") %>% pull(name)), 
-#                           organism = "drerio")
-# 
-# ## format stuff
-# 
-# ## combine results
-# combined_results <- full_join(multi_gos_res_reptiles$result %>%
-#                                 mutate(model = "Reptile"),
-#                               multi_gos_res_mammals$result %>%
-#                                 mutate(model = "Mammal")) %>%
-#   full_join(., multi_gos_res_fish$result %>%
-#               mutate(model = "Fish")) %>%
-#   full_join(., multi_gos_res_allvert$result %>%
-#               mutate(model = "All-vertebrate")) %>%
-#   mutate(nltpadj = -log10(p_value)) %>%
-#   ## for cutoff
-#   mutate(nltpadjc = ifelse(nltpadj <= 16,
-#                            nltpadj,
-#                            17)) %>%
-#   mutate(query = gsub(".*negatively associated.*",
-#                       "Negatively associated", query)) %>%
-#   mutate(query = gsub(".*positively associated.*",
-#                       "Positively associated", query)) %>%
-#   mutate(prop_genes = intersection_size/query_size*1)
-# 
-# ## save it
-# # saveRDS(combined_results, file=paste0("dataFiles/11.00_combined_results_homo_posneg.RData"))
-# 
-# Sys.time()
+Sys.time()
+
+## NB: gprofiler2 package supports all the same organisms, namespaces
+## and data sources as the web tool.
+## The list of organisms and corresponding data sources is
+## available here: https://biit.cs.ut.ee/gprofiler/page/organism-list.
+
+## pos/neg (takes ages)
+
+multi_gos_res_reptiles = gost(query=list("Reptiles - positively associated" =
+                                           positive_promoters_sig_all %>%
+                                           filter(model == "Reptile") %>% pull(name),
+                                         "Reptiles - negatively associated" =
+                                           negative_promoters_sig_all %>%
+                                           filter(model == "Reptile") %>% pull(name)),
+                              ordered_query = TRUE,
+                              organism = "ggallus")
+
+multi_gos_res_mammals = gost(query=list("Mammals - positively associated" =
+                                           positive_promoters_sig_all %>%
+                                           filter(model == "Mammal") %>% pull(name),
+                                        "Mammals - negatively associated" =
+                                           negative_promoters_sig_all %>%
+                                           filter(model == "Mammal") %>% pull(name)),
+                             ordered_query = TRUE,
+                             organism = "hsapiens")
+
+multi_gos_res_allvert = gost(query=list("All-vertebrates - positively associated" =
+                                           positive_promoters_sig_all %>%
+                                           filter(model == "All-vertebrate") %>% pull(name),
+                                        "All-vertebrates - negatively associated" =
+                                           negative_promoters_sig_all %>%
+                                           filter(model == "All-vertebrate") %>% pull(name)),
+                             ordered_query = TRUE,
+                             organism = "hsapiens")
+
+multi_gos_res_fish = gost(query=list("Fish - positively associated" =
+                                       negative_promoters_sig_all %>%
+                                       filter(model == "Fish") %>% pull(name),
+                                     "Fish - negatively associated" =
+                                       negative_promoters_sig_all %>%
+                                       filter(model == "Fish") %>% pull(name)),
+                          ordered_query = TRUE,
+                          organism = "drerio")
+
+## format stuff
+
+## combine results
+combined_results <- full_join(multi_gos_res_reptiles$result %>%
+                                mutate(model = "Reptile"),
+                              multi_gos_res_mammals$result %>%
+                                mutate(model = "Mammal")) %>%
+  full_join(., multi_gos_res_fish$result %>%
+              mutate(model = "Fish")) %>%
+  full_join(., multi_gos_res_allvert$result %>%
+              mutate(model = "All-vertebrate")) %>%
+  mutate(nltpadj = -log10(p_value)) %>%
+  ## for cutoff
+  mutate(nltpadjc = ifelse(nltpadj <= 16,
+                           nltpadj,
+                           17)) %>%
+  mutate(query = gsub(".*negatively associated.*",
+                      "Negatively associated", query)) %>%
+  mutate(query = gsub(".*positively associated.*",
+                      "Positively associated", query)) %>%
+  mutate(prop_genes = intersection_size/query_size*1)
+
+## save it
+# saveRDS(combined_results, file=paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.RData"))
+
+Sys.time()
 ```
 
 ```{r}
-combined_results <- readRDS(paste0("dataFiles/11.00_combined_results_homo_pn.RData"))
+# combined_results <- readRDS(paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.RData"))
 ```
 
 ```{r warning=FALSE, message=FALSE}
-library(eulerr)
-
 unique_function_list <- list(
   Allvert =
     unique(combined_results %>%
@@ -348,10 +465,12 @@ p2<-ggplot(shared_function_table,
   scale_y_continuous(labels=abs, 
                     limits=c(min(shared_function_table$p.value)*1.15,
                     max(shared_function_table$p.value)*1.2))+
-  scale_y_break(breaks=c(-0.001, ybreak), scales="free")+
+  # scale_y_break(breaks=c(-0.001, ybreak), scales="free")+
+  scale_y_break(breaks=c(3.5, 7), scales="free")+
   scale_fill_manual(values=my_colours, name="Model")+
-  labs(title = tit, y="-log10(p-adj)", tag="/ /")+ 
-  theme(plot.tag.position = c(0.624, 0.16), ## x, y
+  labs(title = tit, y="-log10(p-adj)", tag="/ /")+
+  # labs(title = tit, y="-log10(p-adj)")+
+  theme(plot.tag.position = c(0.665, 0.16), ## x, y
         plot.tag = element_text(size=9),
         legend.position="bottom",
         legend.margin=margin(7,-7,-7,-7),
@@ -377,27 +496,28 @@ p2<-ggplot(shared_function_table,
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())
 
-# p2
+p2
 ```
 
-
 ```{r fig.width = 8.75, fig.height=7}
-part1 <- ggarrange(psc+ggtitle("Top five genes")+
+part1 <- ggarrange(psc+ggtitle("Strongly associated genes")+
                                theme(title = element_text(size=10), 
-                                     axis.text.x=element_text(size=7),
+                                     axis.text.x=element_text(size=7, 
+                                                              vjust=0.5,
+                                                              face="italic"),
                                      axis.text.y=element_text(size=8),
                                      axis.title.y=element_text(size=10)), 
                              ## add spacer
                              ggplot() + theme_void(),  
                              ## add title to euler
-                             annotate_figure(eul, top = text_grob("Function count", 
+                             annotate_figure(eul, top = text_grob("Enriched function count", 
                                                                   size = 10)), 
                              ggplot() + theme_void(),
                              nrow = 1, widths = c(0.75, 0.05, 0.25, 0.05),
                              # font.label=list(face="plain"),
                              labels = c("A", "", "B", ""))
 
-fig_title <- as.expression(bquote(bold('C ')~'   Shared functions'))
+fig_title <- as.expression(bquote(bold('C ')~'   Shared enriched functions'))
 
 ((part1 + p2+ggtitle(fig_title)+
     theme(plot.title = element_text(size=11, margin=margin(0,0,0,0)),
@@ -405,12 +525,17 @@ fig_title <- as.expression(bquote(bold('C ')~'   Shared functions'))
     plot_layout(nrow = 2, ncol=1,
                 heights = c(1, 2)))
 
-ggsave(paste0("figuresTables/Figure [functional].svg"),
+ggsave(paste0("figuresTables/Figure [functional_gsea].svg"),
        width = 8.75,
        height = 7,
        units = "in")
 
-ggsave(paste0("figuresTables/Figure [functional].png"),
+ggsave(paste0("figuresTables/Figure [functional_gsea].png"),
+       width = 8.75,
+       height = 7,
+       units = "in")
+
+ggsave(paste0("figuresTables/Figure [functional_gsea].pdf"),
        width = 8.75,
        height = 7,
        units = "in")
@@ -595,7 +720,7 @@ gene_table <- psc_data %>%
     organism == "Chicken" & gene_name == "ATP6V0D2" ~ Chicken_ATP6V0D2_exp,
     organism == "Chicken" & gene_name == "OSTN" ~ Chicken_OSTN_exp)) 
 
-write.csv(gene_table, "figuresTables/Table S[gene_table].csv", row.names=FALSE)
+# write.csv(gene_table, "figuresTables/Table S[gene_table].csv", row.names=FALSE)
 ```
 
 ```{r}

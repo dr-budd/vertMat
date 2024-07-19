@@ -28,6 +28,12 @@ library(grid)
 fish_colour <- scales::viridis_pal(option="D")(4)[3]
 mammals_colour <- scales::viridis_pal(option="D")(4)[2]
 reptiles_colour <- scales::viridis_pal(option="D")(4)[1]
+
+## create colours that correspond to "category"
+cols <- c("grey30", 
+          viridis_pal(option="D", direction=-1)(4)[2], 
+          viridis_pal(option="D", direction=-1)(4)[3],
+          viridis_pal(option="D", direction=-1)(4)[4])
 ```
 
 ```{r}
@@ -127,13 +133,24 @@ min(glmnetcv_corrs_long %>%
       pull(value))
 ```
 
-```{r fig.width=8, fig.height=11}
-## create colours that correspond to "category"
-cols <- c("grey30", 
-          viridis_pal(option="D", direction=-1)(4)[2], 
-          viridis_pal(option="D", direction=-1)(4)[3],
-          viridis_pal(option="D", direction=-1)(4)[4])
+```{r}
+## stats for results (group-spec)
+for (mod in models){
+  print(paste0("Maximum p-value (", mod, ")"))
+  print(max(glmnetcv_corrs_long %>%
+        filter(model == mod) %>%
+        filter(name == "p.value_train" | name == "p.value_validate") %>%
+        pull(value)))
 
+  print(paste0("Minimum R (", mod,")"))
+  print(min(glmnetcv_corrs_long %>%
+        filter(model == mod) %>%
+        filter(name == "estimate_train" | name == "estimate_validate") %>%
+        pull(value)))
+}
+```
+
+```{r fig.width=8, fig.height=11}
 counter <- 0
 for (mod in models) {
   
@@ -164,10 +181,10 @@ for (mod in models) {
                      ggtheme=theme_bw(),
                      legend="bottom")+ 
     stat_cor(aes(label=paste(after_stat(r.label),
-                             ..rr.label..,
-                             ..p.label..,
+                             after_stat(rr.label),
+                             after_stat(p.label),
                              sep="~`,`~")),
-             method="spearman",
+             method="pearson",
              size=2.5,
              label.y=ymax*0.99,
              label.sep='\n')+
@@ -335,8 +352,8 @@ for (mod in models) {
     facet_wrap(~name, scales="free")+
     theme_bw()+
     ggtitle(mod)+
-    stat_cor(aes(label=paste(after_stat(r.label), ..rr.label.., ..p.label.., sep="~`,`~")), 
-             method="spearman",
+    stat_cor(aes(label=paste(after_stat(r.label), after_stat(rr.label), after_stat(p.label), sep="~`,`~")), 
+             method="pearson",
              size=2.5)
   
   plot_list[[counter]] <- fp
@@ -477,6 +494,8 @@ cv_metrics <- all_models_new %>%
   arrange(., Model)
 
 write.csv(cv_metrics, "figuresTables/Table S[cv_metrics].csv", row.names=FALSE)
+
+cv_metrics
 ```
 
 ```{r}
@@ -509,7 +528,7 @@ bagged_phenoresults_all <- bagged_phenoresults_test_allhomo %>%
   full_join(., bagged_phenoresults_trainval_mammalshomo) %>%
   full_join(., bagged_phenoresults_trainval_reptilesgallus) %>%
   select(model_group, organism_name, mean_age_mat, 
-         bagged_detrans_predicted_age_mat, bagged_detrans_relative_error, 
+         bagged_detrans_predicted_age_mat, bagged_detrans_relative_error, bagged_detrans_absolute_error, 
          model, model_labs, initial_split) %>%
   mutate(initial_split_labs=gsub("trainValidate", "Training and validation data", initial_split) %>%
            gsub("test", "Test data", .)) %>%
@@ -539,6 +558,9 @@ bagged_phenoresults_all <- bagged_phenoresults_all %>%
          detrans_squared_error_group = (mean_age_mat - bagged_detrans_predicted_age_mat)^2) %>%
   mutate(rmse_group = sqrt(mean(squared_error_group)), 
          detrans_rmse_group = sqrt(mean(detrans_squared_error_group)))
+
+## export for model comparisons
+write.csv(bagged_phenoresults_all, "dataFiles/07.00_bagged_phenoresults_all.csv", row.names=F)
 ```
 
 
@@ -559,6 +581,8 @@ group_rmse_lab <- bagged_phenoresults_all %>%
 legend_labels <- c("*Danio rerio*",
                    "*Gallus gallus*",
                    "*Homo sapiens*")
+
+why<-0.9
 
 avtt <- ggscatter(data=bagged_phenoresults_all %>% filter(model == "allhomo"),
                   x="mean_age_mat",
@@ -600,7 +624,7 @@ avtt <- ggscatter(data=bagged_phenoresults_all %>% filter(model == "allhomo"),
                            after_stat(rr.label),
                            after_stat(p.label),
                            sep="~`,`~")),
-           method="spearman",
+           method="pearson",
            label.x.npc=0.48,
            label.y.npc=0.225,
            size=2.75)+
@@ -608,25 +632,29 @@ avtt <- ggscatter(data=bagged_phenoresults_all %>% filter(model == "allhomo"),
                            after_stat(rr.label),
                            after_stat(p.label),
                            sep="~`,`~")),
-           method="spearman",
+           method="pearson",
            label.x.npc=0.48,
            label.y.npc=0.29,
            size=2.75)+
-  geom_text(x=-1.1, y=1.4, 
+  # geom_text(x=-1.1, y=1.4, 
+  ggpp::geom_text_npc(npcx="left", npcy="top", 
             size=3,
             hjust=0,
             check_overlap = TRUE,
             aes(label=paste0("RMSE: ", 
                              round(detrans_rmse, digits=2))))+
-  geom_text(data=group_rmse_lab, 
-            x=-1.1, 
-            y=c(rep(c(1.25, 1.25-0.15, 1.25-0.3, 1.25-0.45), 2)), 
-            size=3, 
-            hjust=0,
-            check_overlap = TRUE,
-            aes(label=paste0("RMSE: ", 
-                             round(detrans_rmse_group, digits=2)), 
-                colour=model_group))+
+  # geom_text(data=group_rmse_lab, 
+  ggpp::geom_text_npc(data = group_rmse_lab, 
+                      npcx="left", 
+                      npcy=c(rep(c(why, why-why*0.05, why-why*0.05*2, why-why*0.05*3), 2)),
+                      # x=-1.1,
+                      # y=c(rep(c(1.25, 1.25-0.15, 1.25-0.3, 1.25-0.45), 2)),
+                      size=3, 
+                      hjust=0,
+                      check_overlap = TRUE,
+                      aes(label=paste0("RMSE: ", 
+                                       round(detrans_rmse_group, digits=2)), 
+                          colour=model_group))+
   theme(strip.background=element_blank(), 
         strip.text=element_text(size=10), 
         legend.position="top")
@@ -713,9 +741,9 @@ fishtt <- ggscatter(data=bagged_phenoresults_all %>%
   facet_grid(initial_split_labs~., scales="free")+
   stat_cor(aes(label=paste(after_stat(r.label),
                            after_stat(rr.label),
-                           ..p.label..,
+                           after_stat(p.label),
                            sep="~`,`~")),
-           method="spearman",
+           method="pearson",
            label.x.npc=0.3,
            label.y.npc=0.05,
            size=2.25)+ 
@@ -724,7 +752,8 @@ fishtt <- ggscatter(data=bagged_phenoresults_all %>%
         legend.text=element_text(angle=90, hjust=1, size=6),
         legend.key.height=unit(0.3, "cm"), 
         legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
-  geom_text(x=-1.1, y=1.3, 
+  # geom_text(x=-1.1, y=1.3, 
+  ggpp::geom_text_npc(npcx="left", npcy="top", 
             size=2.5,
             hjust=0,
             check_overlap = TRUE,
@@ -776,9 +805,9 @@ mammaltt <- ggscatter(data=bagged_phenoresults_all %>%
   facet_grid(initial_split_labs~., scales="free")+
   stat_cor(aes(label=paste(after_stat(r.label),
                            after_stat(rr.label),
-                           ..p.label..,
+                           after_stat(p.label),
                            sep="~`,`~")),
-           method="spearman",
+           method="pearson",
            label.x.npc=0.3,
            label.y.npc=0.05,
            size=2.25)+ 
@@ -787,7 +816,8 @@ mammaltt <- ggscatter(data=bagged_phenoresults_all %>%
         legend.text=element_text(angle=90, hjust=1, size=6),
         legend.key.height=unit(0.3, "cm"), 
         legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
-  geom_text(x=-1.1, y=1.15, 
+  # geom_text(x=-1.1, y=1.15, 
+  ggpp::geom_text_npc(npcx="left", npcy="top", 
             size=2.5,
             hjust=0,
             check_overlap = TRUE,
@@ -840,9 +870,9 @@ reptilett <- ggscatter(data=bagged_phenoresults_all %>%
   facet_grid(initial_split_labs~., scales="free")+
   stat_cor(aes(label=paste(after_stat(r.label),
                            after_stat(rr.label),
-                           ..p.label..,
+                           after_stat(p.label),
                            sep="~`,`~")),
-           method="spearman",
+           method="pearson",
            label.x.npc=0.3,
            label.y.npc=0.05,
            size=2.25)+ 
@@ -851,7 +881,8 @@ reptilett <- ggscatter(data=bagged_phenoresults_all %>%
         legend.text=element_text(angle=90, hjust=1, size=6),
         legend.key.height=unit(0.3, "cm"), 
         legend.margin=margin(-0.1,0,0,0, unit='cm'))+ ##trbl
-  geom_text(x=-1.1, y=1.15, 
+  # geom_text(x=-1.1, y=1.15, 
+  ggpp::geom_text_npc(npcx="left", npcy="top", 
             size=2.5,
             hjust=0,
             check_overlap = TRUE,
@@ -951,6 +982,11 @@ ggsave("figuresTables/Figure [mc_main_ns].pdf",
        units="in")
 
 ggsave("figuresTables/Figure [mc_main_ns].png",
+       width=8.25,
+       height=9,
+       units="in")
+
+ggsave("figuresTables/Figure [mc_main_ns].svg",
        width=8.25,
        height=9,
        units="in")

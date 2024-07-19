@@ -56,7 +56,6 @@ data_mammalshomo <- left_join(data_mammalshomo, promoter_names_mammals)
 data_reptilesgallus <- left_join(data_reptilesgallus, promoter_names_reptiles)
 ```
 
-
 ```{r}
 ## import species orders (taxonomic rank)
 order_groups <- read.csv("dataFiles/07.00_glmnetcv_phenoresults_allhomo.csv") %>%
@@ -142,8 +141,6 @@ generate_plot <- function(model_name, combined_data, prdctr_type) {
   return(plot)
 }
 
-
-
 feat_plot <- ggarrange(
   ## order 
   generate_plot("allhomo", combined, "Order")+
@@ -206,6 +203,105 @@ feat_plot <- ggarrange(
 feat_plot
 
 ggsave("figuresTables/Figure S[feats].png", width=8.75, height=11.25, units="in")
+```
+
+```{r fig.width=8, fig.height=5}
+## calculate proportions for species order
+
+## import data
+
+combined_all <- NULL
+for (data_set in data_sets) {
+  data_set_tl <- tolower(data_set)
+  temp_data<-read.csv(paste0("dataFiles/07.00_allfeatures_", data_set_tl, ".csv")) %>% 
+    mutate(model = data_set_tl)
+  # assign(paste0("all_features_", data_set_tl), temp_data)
+  combined_all <- rbind(temp_data, combined_all)
+}
+
+combined_all_sum <- combined_all %>% 
+  rename(feature_id=features) %>%
+  ## add predictor type
+  mutate(predictor_type = ifelse(grepl("order", feature_id), 
+                                        "Order", 
+                                        ifelse(feature_id == "prop_gc", 
+                                               "GC proportion", 
+                                               ifelse(grepl("FP", feature_id),
+                                                      "Promoter", 
+                                                      "Other")))) %>%
+  group_by(model, predictor_type) %>%
+  summarise(total=n())
+
+combined_sum <- combined %>% 
+  filter(!is.na(weight)) %>%
+  group_by(model, predictor_type, mod_num_labs) %>%
+  summarise(., n=n()) %>%
+  left_join(combined_all_sum) %>%
+  mutate(perc = round(100/total*n, digits=0), 
+         min_perc = min(perc), 
+         max_perc = max(perc), 
+         median_perc = median(perc))
+
+plot_data <- combined_sum %>% 
+  # filter(predictor_type=="Order") %>% 
+  select(model, mod_num_labs, perc, min_perc, max_perc, median_perc)
+
+ggplot(plot_data, 
+       aes(x=mod_num_labs, y=perc, fill=model))+
+  geom_bar(stat="identity")+
+  facet_grid(predictor_type~model)+
+  scale_fill_viridis_d(option="D", direction=-1)+
+  geom_text(aes(x=5, y=100,
+                label=paste0("Med [Min, Max]: ", median_perc, " [", min_perc, ",", max_perc, "]")),
+            size=2.5,
+            check_overlap=TRUE)+
+  theme_bw()+
+  theme(axis.text.x=(element_text(angle=90, vjust=0.5)), 
+        legend.position="none")
+```
+
+```{r}
+## print values
+for (data_set in data_sets) {
+  data_set_tl <- tolower(data_set)
+  print(paste0("######################## ", data_set_tl, " ########################"))
+  temp_data <- filter(plot_data, model==data_set_tl)
+  for(pt in levels(factor(temp_data$predictor_type))) {
+    print(pt)
+    temp_data2 <- filter(temp_data, predictor_type==pt)
+    print(paste0("Median [Min, Max]: ", 
+               unique(temp_data2$median_perc), " [", unique(temp_data2$min_perc), 
+               ",", unique(temp_data2$max_perc), "]"))
+    
+  }
+  
+}
+```
+
+```{r message=FALSE}
+combined_sum_allfeats <- combined %>% 
+  filter(!is.na(weight)) %>%
+  group_by(model, mod_num_labs) %>%
+  summarise(., n=n()) %>%
+  left_join(combined_all %>% 
+              group_by(model) %>%
+              summarise(total=n())) %>%
+  mutate(perc = round(100/total*n, digits=0), 
+         min_perc = min(perc), 
+         max_perc = max(perc), 
+         median_perc = median(perc))
+
+## print values
+for (data_set in data_sets) {
+  data_set_tl <- tolower(data_set)
+  print(paste0("######################## ", data_set_tl, " ########################"))
+  temp_data <- filter(combined_sum_allfeats, model==data_set_tl)
+  print(paste0("Median [Min, Max]: ", 
+               unique(temp_data$median_perc), " [", unique(temp_data$min_perc), 
+               ",", unique(temp_data$max_perc), "]"))
+  
+}
+
 ```
 
 ```{r}

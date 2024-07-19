@@ -1,13 +1,12 @@
 ## SET UP ----
 
-## define models
+# define models
 models <- c("AllHomo",
             "FishDanio",
             "MammalsHomo",
             "ReptilesGallus")
 
-## for troubleshooting
-## models <- c("ReptilesGallus")
+# models <- c("ReptilesGallus")
 
 ## set working to script location
 setwd(dirname(rstudioapi::getActiveDocumentContext()$path))

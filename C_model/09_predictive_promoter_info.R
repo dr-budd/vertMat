@@ -154,7 +154,7 @@ for (mod in models){
     )
     
     if (inherits(temp_corr, "error")) {
-      ## error occurred, print a message and continue to the next iteration
+      # Error occurred, print a message and continue to the next iteration
       message(paste("Error occurred for promoter:", promoter))
       next
     }

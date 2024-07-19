@@ -58,7 +58,9 @@ models <- c("vertebrate",
             "reptilesgallus")
 
 ## import python data
-wd <- "../life_pi/outputs/"
+wd <- "../life_pi-main@764c9a4bf87/outputs/"
+
+## ???
 
 ## import pandas
 pd <- import("pandas")
