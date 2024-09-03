@@ -4,7 +4,9 @@ Analysis pipeline for:
 
 >Budd, A., Yong, S.Y., Heydenrych, M., Mayne, B., Berry, O. and Jarman, S., 2024. Universal prediction of vertebrate species age at maturity.
 
-https://assets-eu.researchsquare.com/files/rs-4448358/v1/6a612c55-fe0d-46a6-ac3f-b55bf3c22ba7.pdf
+[Pre-print](https://assets-eu.researchsquare.com/files/rs-4448358/v1/6a612c55-fe0d-46a6-ac3f-b55bf3c22ba7.pdf)
+
+[10.5281/zenodo.8475](https://doi.org/10.5281/zenodo.8475).
 
 ---
 
