@@ -6,7 +6,7 @@ Analysis pipeline for:
 
 [Pre-print](https://assets-eu.researchsquare.com/files/rs-4448358/v1/6a612c55-fe0d-46a6-ac3f-b55bf3c22ba7.pdf)
 
-[10.5281/zenodo.8475](https://doi.org/10.5281/zenodo.8475).
+[![DOI](https://zenodo.org/badge/781254240.svg)](https://zenodo.org/doi/10.5281/zenodo.13637779)
 
 ---
 
