@@ -336,13 +336,13 @@ combined_results <- full_join(multi_gos_res_reptiles$result %>%
   mutate(prop_genes = intersection_size/query_size*1)
 
 ## save it
-# saveRDS(combined_results, file=paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.RData"))
+# saveRDS(combined_results, file=paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.rds"))
 
 Sys.time()
 ```
 
 ```{r}
-# combined_results <- readRDS(paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.RData"))
+# combined_results <- readRDS(paste0("dataFiles/11.00_combined_results_homo_posneg_gsea.rds"))
 ```
 
 ```{r warning=FALSE, message=FALSE}

@@ -24,9 +24,9 @@ The code is separated into the following three folders:
 
 All required files are in the repo, with the exception of the raw genomic data which can be downloaded directly from https://www.ncbi.nlm.nih.gov/genome/.
 
-All files and folders should be run in order, however, the code in `A_getGenomicData` was written for and run on a HPC facility that uses a SLURM batch-queue system. This means that many of the slurm scripts (.slurm extension) specify core allocation, run times and memory usage allocation that may need to be adapted for different platforms. To simplify use, all output from the steps in `A_getGenomicData` are included in the repo so that users can run the local steps (in `B_exploreData` and `C_model`) of the analyses *without* having to repeat any of the steps run remotely on a HPC. 
+All files and folders should be run in order, however, the code in `A_getGenomicData` was written for and run on a HPC facility that uses a SLURM batch-queue system. This means that many of the slurm scripts (.slurm extension) specify core allocation, run times and memory usage allocation that may need to be adapted for different platforms. To simplify use, all output from the steps in `A_getGenomicData` are included in the repo so that users can run the local steps (in `B_exploreData` and `C_model`) of the analyses *without* having to repeat any of the steps run remotely on a HPC.
 
-Output files begin with the number of the script in which they were generated. Large files have been compressed and will need to be expanded before use. 
+Output files begin with the number of the script in which they were generated. **NB: Large files have been compressed and will need to be expanded before use.** 
 
 ## :woman_technologist: Author
 Alyssa Budd (alyssa.budd@csiro.au).
