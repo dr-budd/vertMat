@@ -1,12 +1,15 @@
 # :hatching_chick::dna: Vertebrate age at maturity prediction from genomic data
 
-Analysis pipeline for:
-
->Budd, A., Yong, S.Y., Heydenrych, M., Mayne, B., Berry, O. and Jarman, S., 2024. Universal prediction of vertebrate species age at maturity.
-
-[Pre-print](https://assets-eu.researchsquare.com/files/rs-4448358/v1/6a612c55-fe0d-46a6-ac3f-b55bf3c22ba7.pdf)
-
 [![DOI](https://zenodo.org/badge/781254240.svg)](https://zenodo.org/doi/10.5281/zenodo.13637779)
+
+## :page_facing_up: Associated Publication
+
+[![Journal](https://img.shields.io/badge/Published_in-Communications_Biology-2b7bb9.svg)](https://www.nature.com/articles/s42003-024-07046-z)
+[![Preprint](https://img.shields.io/badge/Preprint-Research_Square-6f42c1.svg)](https://assets-eu.researchsquare.com/files/rs-4448358/v1/6a612c55-fe0d-46a6-ac3f-b55bf3c22ba7.pdf)
+
+> **Budd, A.M.**, Yong, S.Y., Heydenrych, M.J., Mayne, B., Berry, O., & Jarman, S.N. (2024).  
+> *Universal prediction of vertebrate species age at maturity.*  
+> _Communications Biology, 7_(1414). [https://doi.org/10.1038/s42003-024-07046-z](https://doi.org/10.1038/s42003-024-07046-z)
 
 ---
 
@@ -30,8 +33,8 @@ All files and folders should be run in order, however, the code in `A_getGenomic
 
 Output files begin with the number of the script in which they were generated. **NB: Large files have been compressed and will need to be expanded before use.** 
 
-## :woman_technologist: Author
-Alyssa Budd (alyssa.budd@csiro.au).
+## :woman_technologist: Authors
+Alyssa Budd and Suk Yee Yong.
 
 ## :bouquet: Acknowledgements
 The scripts have been adapted from a previous model used to predict fish lifespan https://github.com/dr-budd/fish_life. All scripts in `lifepi` were by written by Suk Yee Yong (sukyee.yong@csiro.au).
